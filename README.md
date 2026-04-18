@@ -99,12 +99,18 @@ review each mapping, then publish only the ones you approve.
 
 ```bash
 export GOOGLE_CLOUD_PROJECT=my-proj
-export VERTEX_RAG_CORPUS=projects/my-proj/locations/us-central1/ragCorpora/1234
 export DATAPLEX_GLOSSARY_ID=enterprise-glossary
+# Optional: override the default corpus display name
+# export VERTEX_RAG_CORPUS_DISPLAY_NAME=industry-glossaries
 
 uvicorn webapp:app --reload --port 8080
 # open http://localhost:8080
 ```
+
+The web app **always** grounds suggestions in the corpus built by
+`scripts/build_rag_corpus.py` (display name `industry-glossaries` by default).
+Users cannot supply an alternative corpus from the UI — it is resolved
+automatically by display name from the project they enter.
 
 Flow:
 

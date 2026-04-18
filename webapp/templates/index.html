@@ -7,6 +7,12 @@
   schema and Dataplex data insights, infer the industry and domain, and
   propose business-glossary terms mapped to columns.</p>
 
+  <p class="meta">
+    Grounding: Vertex AI RAG corpus
+    <code>{{ rag_corpus_display_name }}</code>
+    (resolved automatically from your project).
+  </p>
+
   <form method="post" action="/suggest">
     <label>
       GCP project id
@@ -32,13 +38,6 @@
       <label>
         Vertex / Dataplex location
         <input type="text" name="location" value="{{ default_location }}">
-      </label>
-
-      <label>
-        Vertex RAG corpus <span class="hint">(full resource name)</span>
-        <input type="text" name="rag_corpus"
-               value="{{ default_rag_corpus }}"
-               placeholder="projects/.../ragCorpora/1234">
       </label>
 
       <label>

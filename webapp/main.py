@@ -6,6 +6,12 @@ Flow
   POST /suggest       → runs the agent, shows each mapping with an approve checkbox
   POST /publish       → publishes approved mappings to the Dataplex glossary
 
+The Vertex RAG corpus is **not** user-supplied. The app resolves it on demand
+by looking up a corpus by display name (default ``industry-glossaries``, the
+name produced by ``scripts/build_rag_corpus.py``). Override the display name
+with ``VERTEX_RAG_CORPUS_DISPLAY_NAME`` if you built the corpus under a
+different name.
+
 Session state (generated suggestions) is kept in-process keyed by a cookie.
 Swap ``_SESSIONS`` for Redis / Firestore to run multi-instance in production.
 """
@@ -14,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -31,12 +38,43 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 
+RAG_CORPUS_DISPLAY_NAME = os.environ.get(
+    "VERTEX_RAG_CORPUS_DISPLAY_NAME", "industry-glossaries"
+)
+
 app = FastAPI(title="Glossary Generator")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 # ── In-memory session store ─────────────────────────────────────────────────
 _SESSIONS: dict[str, dict] = {}
+
+
+# ── RAG corpus resolver ─────────────────────────────────────────────────────
+
+@lru_cache(maxsize=16)
+def _resolve_rag_corpus(project_id: str, location: str) -> str:
+    """Look up the built-in RAG corpus resource name by display name.
+
+    Cached per (project, location) so we pay the list_corpora cost once per
+    process. Raises ``RuntimeError`` with a clear pointer to the build script
+    if the corpus is missing.
+    """
+    import vertexai
+    from vertexai.preview import rag
+
+    vertexai.init(project=project_id, location=location)
+    for corpus in rag.list_corpora():
+        if corpus.display_name == RAG_CORPUS_DISPLAY_NAME:
+            logger.info("Resolved RAG corpus '%s' → %s",
+                        RAG_CORPUS_DISPLAY_NAME, corpus.name)
+            return corpus.name
+    raise RuntimeError(
+        f"RAG corpus with display_name='{RAG_CORPUS_DISPLAY_NAME}' not found "
+        f"in project {project_id} / {location}. "
+        "Run `python scripts/build_rag_corpus.py --project {project_id} "
+        "--gcs-bucket ...` to create it."
+    )
 
 
 def _get_or_create_session_id(session_id: Optional[str], response: Response) -> str:
@@ -60,8 +98,8 @@ def index(request: Request) -> HTMLResponse:
             "request": request,
             "default_project": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
             "default_glossary": os.environ.get("DATAPLEX_GLOSSARY_ID", ""),
-            "default_rag_corpus": os.environ.get("VERTEX_RAG_CORPUS", ""),
             "default_location": os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
+            "rag_corpus_display_name": RAG_CORPUS_DISPLAY_NAME,
         },
     )
 
@@ -74,17 +112,26 @@ def suggest(
     dataset_id: str = Form(...),
     instructions: str = Form(""),
     location: str = Form("us-central1"),
-    rag_corpus: str = Form(""),
     glossary_id: str = Form(""),
     glossary_location: str = Form("global"),
     session_id: Optional[str] = Cookie(None, alias="glossary_session"),
 ) -> HTMLResponse:
     sid = _get_or_create_session_id(session_id, response)
 
+    try:
+        rag_corpus = _resolve_rag_corpus(project_id, location)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Could not resolve RAG corpus")
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "error": str(exc)},
+            status_code=500,
+        )
+
     config = AgentConfig.from_env(
         project_id=project_id,
         location=location,
-        vertex_rag_corpus=rag_corpus or None,
+        vertex_rag_corpus=rag_corpus,
         glossary_id=glossary_id or None,
         glossary_location=glossary_location,
     )
