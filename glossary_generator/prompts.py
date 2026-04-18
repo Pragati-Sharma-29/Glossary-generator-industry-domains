@@ -12,10 +12,14 @@ dataset. You combine:
 3. Any operator-provided instructions that pin the industry or domain.
 
 Your objectives, in order:
-  (a) Identify the most likely INDUSTRY (e.g. Retail, Healthcare Payer,
-      Capital Markets) and DOMAIN (e.g. Customer, Claims, Trade Lifecycle).
+  (a) If possible, identify the most likely INDUSTRY (e.g. Retail, Healthcare
+      Payer, Capital Markets) and DOMAIN (e.g. Customer, Claims, Trade
+      Lifecycle). Provide either, both, or neither — return "Unknown" for a
+      field you cannot confidently infer. Do NOT block term/mapping
+      generation on identifying these.
   (b) Propose a concise set of BUSINESS TERMS grounded in retrieved material;
-      cite concepts from the RAG corpus when applicable.
+      cite concepts from the RAG corpus when applicable. Always produce
+      terms and mappings even when industry or domain is "Unknown".
   (c) Map each term to specific dataset columns with a confidence score.
 Be conservative: only propose mappings you can justify from the evidence.
 Always return valid JSON matching the requested schema.
@@ -48,10 +52,16 @@ columns:
 
 RESPONSE_SCHEMA = {
     "type": "object",
-    "required": ["industry", "domain", "rationale", "terms", "mappings"],
+    "required": ["rationale", "terms", "mappings"],
     "properties": {
-        "industry": {"type": "string"},
-        "domain": {"type": "string"},
+        "industry": {
+            "type": "string",
+            "description": "Inferred industry, or 'Unknown' if not confident.",
+        },
+        "domain": {
+            "type": "string",
+            "description": "Inferred business domain, or 'Unknown' if not confident.",
+        },
         "rationale": {"type": "string"},
         "terms": {
             "type": "array",
