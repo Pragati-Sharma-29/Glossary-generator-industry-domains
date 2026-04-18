@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glossary-generator"
+version = "0.1.0"
+description = "Suggest business glossary terms and column mappings for BigQuery datasets using Dataplex data insights and Vertex AI RAG."
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "google-cloud-bigquery>=3.25.0",
+    "google-cloud-dataplex>=2.6.0",
+    "google-cloud-aiplatform[rag]>=1.71.0",
+    "google-api-core>=2.19.0",
+    "protobuf>=4.25.0",
+]
+
+[project.scripts]
+glossary-generator = "glossary_generator.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["glossary_generator*"]

@@ -1,0 +1,80 @@
+"""Shared dataclasses describing inputs and outputs of the agent."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+
+@dataclass
+class ColumnProfile:
+    """Profile for one column, assembled from BigQuery schema + Dataplex insights."""
+
+    name: str
+    data_type: str
+    mode: str = "NULLABLE"
+    description: Optional[str] = None
+    null_ratio: Optional[float] = None
+    distinct_ratio: Optional[float] = None
+    top_values: list[Any] = field(default_factory=list)
+    min_value: Optional[Any] = None
+    max_value: Optional[Any] = None
+    sample_values: list[Any] = field(default_factory=list)
+
+
+@dataclass
+class TableProfile:
+    table_id: str
+    description: Optional[str] = None
+    row_count: Optional[int] = None
+    columns: list[ColumnProfile] = field(default_factory=list)
+    dataplex_insights: Optional[dict] = None  # raw Dataplex data-insights payload
+
+
+@dataclass
+class DatasetContext:
+    project_id: str
+    dataset_id: str
+    location: Optional[str] = None
+    description: Optional[str] = None
+    tables: list[TableProfile] = field(default_factory=list)
+
+
+@dataclass
+class TermSuggestion:
+    """A proposed business glossary term."""
+
+    display_name: str
+    definition: str
+    synonyms: list[str] = field(default_factory=list)
+    related_terms: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ColumnMapping:
+    """A proposed mapping between a term and one or more columns."""
+
+    term_display_name: str
+    table_id: str
+    column_name: str
+    confidence: float
+    rationale: str
+
+
+@dataclass
+class GlossarySuggestion:
+    """Full agent output."""
+
+    industry: str
+    domain: str
+    rationale: str
+    terms: list[TermSuggestion] = field(default_factory=list)
+    mappings: list[ColumnMapping] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "industry": self.industry,
+            "domain": self.domain,
+            "rationale": self.rationale,
+            "terms": [t.__dict__ for t in self.terms],
+            "mappings": [m.__dict__ for m in self.mappings],
+        }
