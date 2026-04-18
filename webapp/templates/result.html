@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Publish result · Glossary Generator{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Publish result</h2>
+  <p>
+    Published <strong>{{ approved_count }}</strong> of
+    <strong>{{ total_count }}</strong> suggested mappings to Dataplex glossary
+    <code>{{ glossary_id }}</code> in project <code>{{ project_id }}</code>.
+  </p>
+</section>
+
+<section class="card">
+  <h3>Created terms ({{ report.created_terms | length }})</h3>
+  {% if report.created_terms %}
+    <ul>
+      {% for t in report.created_terms %}
+        <li><code>{{ t.name }}</code></li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No new terms created.</p>
+  {% endif %}
+</section>
+
+{% if report.skipped_terms %}
+<section class="card">
+  <h3>Skipped terms ({{ report.skipped_terms | length }})</h3>
+  <ul>
+    {% for t in report.skipped_terms %}
+      <li><code>{{ t.name }}</code> — {{ t.reason }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h3>Entry links ({{ report.mappings | length }})</h3>
+  {% if report.mappings %}
+    <table class="mappings">
+      <thead>
+        <tr><th>Term</th><th>Column</th><th>Link</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for m in report.mappings %}
+        <tr>
+          <td>{{ m.term }}</td>
+          <td><code>{{ m.table }}.{{ m.column }}</code></td>
+          <td>
+            {% if m.entry_link %}
+              <code>{{ m.entry_link }}</code>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>{{ m.status | default("created") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No mappings published.</p>
+  {% endif %}
+</section>
+
+<p><a href="/" class="button primary">Run again</a></p>
+{% endblock %}

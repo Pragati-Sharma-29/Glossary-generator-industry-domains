@@ -1,20 +1,28 @@
 """Publish suggested terms and column mappings to Dataplex business glossary.
 
-The Dataplex business glossary REST API lives under
-``dataplex.googleapis.com/v1/projects/{p}/locations/{loc}/glossaries/{gl}``.
-The Python generated client is ``google.cloud.dataplex_v1.CatalogServiceClient``
-(in recent versions of ``google-cloud-dataplex``). Column-to-term associations
-are written as ``Entry`` + ``Aspect`` records on the BigQuery entry under the
-``@dataplex-types.global.business-glossary`` aspect type, or — when using the
-legacy Data Catalog business glossary — via ``datacatalog_v1.Tag``.
+Writes two kinds of resources
+─────────────────────────────
+1. **GlossaryTerm** — created under
+   ``projects/{p}/locations/{loc}/glossaries/{g}/terms/{term_id}``
+2. **EntryLink** of type ``definition`` — links a BigQuery column entry
+   (in the system-managed ``@bigquery`` entry group) to the glossary term,
+   created under
+   ``projects/{p}/locations/{region}/entryGroups/@bigquery/entryLinks/{id}``.
 
-This module hides both code paths behind one interface. All mutating calls are
-no-ops when ``dry_run=True``.
+Dataplex (Universal Catalog) exposes these via ``dataplex_v1.CatalogServiceClient``.
+Field and method names on that client have evolved across releases of
+``google-cloud-dataplex``; the code below is defensive — if a method is
+missing, it records the intended payload in the report instead of aborting.
+
+Set ``dry_run=True`` to preview without writing anything.
 """
 from __future__ import annotations
 
 import logging
-from typing import Optional
+import re
+import uuid
+from typing import Any, Optional
+from urllib.parse import quote
 
 from google.api_core.exceptions import AlreadyExists, GoogleAPICallError
 from google.cloud import dataplex_v1
@@ -22,6 +30,11 @@ from google.cloud import dataplex_v1
 from .models import ColumnMapping, GlossarySuggestion, TermSuggestion
 
 logger = logging.getLogger(__name__)
+
+# Standard entry link type used to associate a column with its business-glossary term.
+DEFINITION_ENTRY_LINK_TYPE = (
+    "projects/dataplex-types/locations/global/entryLinkTypes/definition"
+)
 
 
 class GlossaryPublisher:
@@ -31,16 +44,18 @@ class GlossaryPublisher:
         glossary_id: str,
         location: str = "global",
         *,
+        bq_region: str = "us",
         dry_run: bool = True,
-        client: Optional[dataplex_v1.CatalogServiceClient] = None,
+        client: Optional[Any] = None,
     ):
         self.project_id = project_id
         self.glossary_id = glossary_id
         self.location = location
+        self.bq_region = bq_region
         self.dry_run = dry_run
         self._client = client or dataplex_v1.CatalogServiceClient()
 
-    # ------------------------------------------------------------------ helpers
+    # ─────────────────────────────────────────────────────────── resource names
 
     @property
     def glossary_name(self) -> str:
@@ -52,75 +67,165 @@ class GlossaryPublisher:
     def _term_name(self, term_id: str) -> str:
         return f"{self.glossary_name}/terms/{term_id}"
 
+    def _bigquery_entry_group(self) -> str:
+        return (
+            f"projects/{self.project_id}/locations/{self.bq_region}"
+            f"/entryGroups/@bigquery"
+        )
+
+    def _bigquery_column_entry(self, dataset_id: str, table_id: str) -> str:
+        """Resource name of the BigQuery table entry.
+
+        The column itself is referenced via the ``path`` field on the
+        ``EntryReference`` (``Schema.<column_name>``).
+        """
+        # Dataplex stores a table's entry id as the URL-encoded
+        # ``//bigquery.googleapis.com/...`` full resource name.
+        bq_resource = (
+            f"//bigquery.googleapis.com/projects/{self.project_id}"
+            f"/datasets/{dataset_id}/tables/{table_id}"
+        )
+        return f"{self._bigquery_entry_group()}/entries/{quote(bq_resource, safe='')}"
+
     @staticmethod
     def _slug(display_name: str) -> str:
-        return (
-            display_name.strip().lower().replace(" ", "-").replace("/", "-")[:63]
-            or "term"
-        )
+        cleaned = re.sub(r"[^a-z0-9\-]+", "-", display_name.strip().lower())
+        return cleaned.strip("-")[:63] or "term"
 
-    # ------------------------------------------------------------------ API calls
+    # ────────────────────────────────────────────────────────────────── public
 
-    def publish(self, suggestion: GlossarySuggestion) -> dict:
-        """Create missing terms and link them to columns. Returns a report dict."""
-        report = {"created_terms": [], "skipped_terms": [], "mappings": []}
+    def publish(
+        self,
+        suggestion: GlossarySuggestion,
+        *,
+        dataset_id: Optional[str] = None,
+    ) -> dict:
+        """Create approved terms and entry links. Returns a structured report."""
+        report: dict = {
+            "created_terms": [],
+            "skipped_terms": [],
+            "mappings": [],
+        }
 
+        # 1) Ensure each referenced term exists.
         for term in suggestion.terms:
-            term_id = self._slug(term.display_name)
-            full_name = self._term_name(term_id)
-            if self.dry_run:
-                report["created_terms"].append({"name": full_name, "dry_run": True})
-                continue
-            try:
-                self._create_term(term_id, term)
-                report["created_terms"].append({"name": full_name})
-            except AlreadyExists:
-                report["skipped_terms"].append({"name": full_name, "reason": "exists"})
-            except GoogleAPICallError as exc:
-                logger.error("Failed to create term %s: %s", full_name, exc)
-                report["skipped_terms"].append({"name": full_name, "reason": str(exc)})
+            self._ensure_term(term, report)
 
+        # 2) Create one EntryLink per mapping.
         for mapping in suggestion.mappings:
-            entry = self._attach_mapping(mapping)
-            report["mappings"].append(entry)
+            record = self._create_entry_link(
+                mapping, dataset_id=dataset_id or self._infer_dataset(mapping)
+            )
+            report["mappings"].append(record)
+
         return report
 
-    # ------------------------------------------------------------------ term CRUD
+    # ──────────────────────────────────────────────────── term creation
 
-    def _create_term(self, term_id: str, term: TermSuggestion) -> None:
-        request = dataplex_v1.CreateGlossaryTermRequest(
-            parent=self.glossary_name,
-            term_id=term_id,
-            glossary_term=dataplex_v1.GlossaryTerm(
-                display_name=term.display_name,
-                description=term.definition,
-            ),
-        )
-        self._client.create_glossary_term(request=request)
+    def _ensure_term(self, term: TermSuggestion, report: dict) -> None:
+        term_id = self._slug(term.display_name)
+        full_name = self._term_name(term_id)
+        if self.dry_run:
+            report["created_terms"].append({"name": full_name, "dry_run": True})
+            return
 
-    # ------------------------------------------------------------------ mapping
+        create_fn = getattr(self._client, "create_glossary_term", None)
+        request_cls = getattr(dataplex_v1, "CreateGlossaryTermRequest", None)
+        term_cls = getattr(dataplex_v1, "GlossaryTerm", None)
+        if not (create_fn and request_cls and term_cls):
+            report["skipped_terms"].append(
+                {"name": full_name, "reason": "dataplex SDK lacks create_glossary_term"}
+            )
+            return
 
-    def _attach_mapping(self, mapping: ColumnMapping) -> dict:
-        """Link a term to a BigQuery column entry.
+        try:
+            create_fn(
+                request=request_cls(
+                    parent=self.glossary_name,
+                    term_id=term_id,
+                    glossary_term=term_cls(
+                        display_name=term.display_name,
+                        description=term.definition,
+                    ),
+                )
+            )
+            report["created_terms"].append({"name": full_name})
+        except AlreadyExists:
+            report["skipped_terms"].append({"name": full_name, "reason": "exists"})
+        except GoogleAPICallError as exc:
+            logger.error("Failed to create term %s: %s", full_name, exc)
+            report["skipped_terms"].append({"name": full_name, "reason": str(exc)})
 
-        Real implementation: upsert an ``Aspect`` of type
-        ``projects/dataplex-types/locations/global/aspectTypes/overview``
-        (or an org-defined synonym-aspect) onto the BigQuery column entry
-        ``projects/{p}/locations/{loc}/entryGroups/@bigquery/entries/...``.
-        We emit a structured stub so callers always get a record, and
-        actually write only when ``dry_run`` is false.
-        """
-        record = {
-            "term": self._term_name(self._slug(mapping.term_display_name)),
-            "table": mapping.table_id,
+    # ──────────────────────────────────────────────────── entry link creation
+
+    def _create_entry_link(
+        self, mapping: ColumnMapping, *, dataset_id: str
+    ) -> dict:
+        term_resource = self._term_name(self._slug(mapping.term_display_name))
+        column_entry = self._bigquery_column_entry(dataset_id, mapping.table_id)
+        link_id = f"gg-{uuid.uuid4().hex[:12]}"
+        parent = self._bigquery_entry_group()
+        entry_link_name = f"{parent}/entryLinks/{link_id}"
+
+        payload = {
+            "term": term_resource,
+            "table": f"{dataset_id}.{mapping.table_id}",
             "column": mapping.column_name,
+            "entry_link": entry_link_name,
+            "entry_link_type": DEFINITION_ENTRY_LINK_TYPE,
             "confidence": mapping.confidence,
             "rationale": mapping.rationale,
             "dry_run": self.dry_run,
         }
+
         if self.dry_run:
-            return record
-        # TODO: call self._client.create_entry / update_aspect once the
-        # customer's entry-group + aspect-type schema is finalised.
-        logger.info("Would publish aspect for mapping: %s", record)
-        return record
+            payload["status"] = "dry-run"
+            return payload
+
+        create_fn = getattr(self._client, "create_entry_link", None)
+        request_cls = getattr(dataplex_v1, "CreateEntryLinkRequest", None)
+        link_cls = getattr(dataplex_v1, "EntryLink", None)
+        ref_cls = getattr(dataplex_v1, "EntryReference", None)
+        if not (create_fn and request_cls and link_cls and ref_cls):
+            payload["status"] = "skipped: SDK lacks create_entry_link"
+            return payload
+
+        try:
+            entry_link = link_cls(
+                entry_link_type=DEFINITION_ENTRY_LINK_TYPE,
+                entry_references=[
+                    ref_cls(
+                        name=column_entry,
+                        type_=ref_cls.Type.SOURCE,
+                        path=f"Schema.{mapping.column_name}",
+                    ),
+                    ref_cls(name=term_resource, type_=ref_cls.Type.TARGET),
+                ],
+            )
+            create_fn(
+                request=request_cls(
+                    parent=parent,
+                    entry_link_id=link_id,
+                    entry_link=entry_link,
+                )
+            )
+            payload["status"] = "created"
+        except AlreadyExists:
+            payload["status"] = "exists"
+        except GoogleAPICallError as exc:
+            logger.error("create_entry_link failed for %s: %s", payload, exc)
+            payload["status"] = f"error: {exc}"
+        return payload
+
+    # ─────────────────────────────────────────────────────────────── helpers
+
+    @staticmethod
+    def _infer_dataset(mapping: ColumnMapping) -> str:
+        """Fall back path when caller didn't pass dataset_id explicitly.
+
+        ``mapping.table_id`` is expected to be the simple table name; if the
+        caller supplied ``dataset.table`` we split accordingly.
+        """
+        if "." in mapping.table_id:
+            return mapping.table_id.split(".", 1)[0]
+        return ""

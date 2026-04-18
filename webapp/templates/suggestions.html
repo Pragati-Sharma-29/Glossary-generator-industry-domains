@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Review suggestions · Glossary Generator{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Review suggestions</h2>
+  <p class="meta">
+    <strong>Dataset:</strong> {{ dataset_id }} &nbsp;·&nbsp;
+    <strong>Industry:</strong> {{ suggestion.industry }} &nbsp;·&nbsp;
+    <strong>Domain:</strong> {{ suggestion.domain }}
+  </p>
+  {% if instructions %}
+    <p class="meta"><strong>Your instructions:</strong> {{ instructions }}</p>
+  {% endif %}
+  <details class="rationale">
+    <summary>Why these suggestions?</summary>
+    <p>{{ suggestion.rationale }}</p>
+  </details>
+</section>
+
+<section class="card">
+  <h3>Proposed terms ({{ suggestion.terms | length }})</h3>
+  <ul class="terms">
+    {% for t in suggestion.terms %}
+      <li>
+        <strong>{{ t.display_name }}</strong>
+        {% if t.synonyms %}<span class="chip">syn: {{ t.synonyms | join(", ") }}</span>{% endif %}
+        <p>{{ t.definition }}</p>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<form method="post" action="/publish" id="publish-form">
+  <section class="card">
+    <div class="row">
+      <h3>Column mappings ({{ suggestion.mappings | length }})</h3>
+      <div class="bulk">
+        <button type="button" onclick="setAll(true)">Approve all</button>
+        <button type="button" onclick="setAll(false)">Decline all</button>
+      </div>
+    </div>
+
+    {% if not suggestion.mappings %}
+      <p>No mappings were generated.</p>
+    {% else %}
+      <table class="mappings">
+        <thead>
+          <tr>
+            <th>Approve</th><th>Term</th><th>Table</th><th>Column</th>
+            <th>Confidence</th><th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in suggestion.mappings %}
+          <tr class="{% if m.confidence < 0.5 %}low-confidence{% endif %}">
+            <td>
+              <input type="checkbox" name="approved_mapping"
+                     value="{{ loop.index0 }}" checked>
+            </td>
+            <td><strong>{{ m.term_display_name }}</strong></td>
+            <td><code>{{ m.table_id }}</code></td>
+            <td><code>{{ m.column_name }}</code></td>
+            <td>{{ "%.2f"|format(m.confidence) }}</td>
+            <td class="rationale-cell">{{ m.rationale }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  <section class="card actions">
+    {% if glossary_id %}
+      <p>Approved mappings will be published as entry links in Dataplex
+         glossary <code>{{ glossary_id }}</code>.</p>
+      <button type="submit" class="primary">Publish approved mappings</button>
+    {% else %}
+      <p class="warning">No glossary id set — go back and fill it in to publish.</p>
+      <a href="/" class="button">Back</a>
+    {% endif %}
+    <a href="/" class="secondary">Start over</a>
+  </section>
+</form>
+
+<script>
+  function setAll(state) {
+    document
+      .querySelectorAll('input[name="approved_mapping"]')
+      .forEach(cb => cb.checked = state);
+  }
+</script>
+{% endblock %}

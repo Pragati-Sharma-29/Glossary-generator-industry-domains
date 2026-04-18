@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Generate glossary suggestions{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Generate glossary suggestions</h2>
+  <p>Enter the BigQuery dataset you want to annotate. The agent will read its
+  schema and Dataplex data insights, infer the industry and domain, and
+  propose business-glossary terms mapped to columns.</p>
+
+  <form method="post" action="/suggest">
+    <label>
+      GCP project id
+      <input type="text" name="project_id" required
+             value="{{ default_project }}" placeholder="my-project">
+    </label>
+
+    <label>
+      BigQuery dataset id
+      <input type="text" name="dataset_id" required
+             placeholder="project.dataset  or  dataset_name">
+    </label>
+
+    <label>
+      Instructions <span class="hint">(optional)</span>
+      <textarea name="instructions" rows="3"
+                placeholder="e.g. P&amp;C insurance claims mart; use ACORD vocabulary"></textarea>
+    </label>
+
+    <details>
+      <summary>Advanced</summary>
+
+      <label>
+        Vertex / Dataplex location
+        <input type="text" name="location" value="{{ default_location }}">
+      </label>
+
+      <label>
+        Vertex RAG corpus <span class="hint">(full resource name)</span>
+        <input type="text" name="rag_corpus"
+               value="{{ default_rag_corpus }}"
+               placeholder="projects/.../ragCorpora/1234">
+      </label>
+
+      <label>
+        Target Dataplex glossary id
+        <input type="text" name="glossary_id"
+               value="{{ default_glossary }}"
+               placeholder="enterprise-glossary">
+      </label>
+
+      <label>
+        Glossary location
+        <input type="text" name="glossary_location" value="global">
+      </label>
+    </details>
+
+    <button type="submit" class="primary">Generate suggestions</button>
+  </form>
+</section>
+{% endblock %}

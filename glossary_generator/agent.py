@@ -87,7 +87,7 @@ class GlossaryGeneratorAgent:
 
         publish = self.config.publish if publish is None else publish
         if publish:
-            result["publish_report"] = self._publish(suggestion)
+            result["publish_report"] = self._publish(suggestion, dataset_id)
         return result
 
     # ------------------------------------------------------------------ LLM step
@@ -184,7 +184,7 @@ class GlossaryGeneratorAgent:
 
     # ------------------------------------------------------------------ publishing
 
-    def _publish(self, suggestion: GlossarySuggestion) -> dict:
+    def _publish(self, suggestion: GlossarySuggestion, dataset_id: str) -> dict:
         if not self.config.glossary_id:
             raise ValueError(
                 "publish=True but no glossary_id set (DATAPLEX_GLOSSARY_ID)"
@@ -193,6 +193,8 @@ class GlossaryGeneratorAgent:
             project_id=self.config.project_id,
             glossary_id=self.config.glossary_id,
             location=self.config.glossary_location,
+            bq_region=self.config.dataplex_location,
             dry_run=False,
         )
-        return publisher.publish(suggestion)
+        bare_dataset = dataset_id.split(".", 1)[-1]
+        return publisher.publish(suggestion, dataset_id=bare_dataset)

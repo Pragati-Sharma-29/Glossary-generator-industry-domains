@@ -92,6 +92,33 @@ python -m glossary_generator my_dataset --publish
 }
 ```
 
+## Web app
+
+A small FastAPI UI is included for the interactive flow — submit a dataset,
+review each mapping, then publish only the ones you approve.
+
+```bash
+export GOOGLE_CLOUD_PROJECT=my-proj
+export VERTEX_RAG_CORPUS=projects/my-proj/locations/us-central1/ragCorpora/1234
+export DATAPLEX_GLOSSARY_ID=enterprise-glossary
+
+uvicorn webapp:app --reload --port 8080
+# open http://localhost:8080
+```
+
+Flow:
+
+1. **Home** – enter project id, dataset id, and optional instructions.
+2. **Review** – the agent runs; each suggested term+mapping is displayed
+   with an approve checkbox (low-confidence rows are highlighted).
+3. **Publish** – approved mappings are written to Dataplex:
+   - A `GlossaryTerm` is created under `projects/{p}/locations/{loc}/glossaries/{g}/terms/{slug}`.
+   - An `EntryLink` of type `definition` is created in the `@bigquery`
+     entry group linking the column to the term.
+
+Session state is held in-process; swap `_SESSIONS` in `webapp/main.py`
+for Redis/Firestore to run multi-instance.
+
 ## Extending
 
 * **Swap in another vocabulary**: add files to your RAG corpus and re-index.

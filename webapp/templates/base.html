@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Glossary Generator{% endblock %}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <h1><a href="/">Glossary Generator</a></h1>
+    <p class="tagline">BigQuery · Dataplex data insights · Vertex RAG</p>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <small>Suggestions are grounded in your Vertex RAG corpus.
+      Always review mappings before publishing.</small>
+  </footer>
+</body>
+</html>
