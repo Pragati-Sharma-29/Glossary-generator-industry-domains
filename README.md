@@ -1,4 +1,4 @@
-# Glossary Generator for BigQuery + Dataplex + Vertex
+# Glossary Generator using industry and domain context
 
 An agent that reads a BigQuery dataset, enriches it with Dataplex
 data-profile / data-insights results, grounds its reasoning in a Vertex AI
