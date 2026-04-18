@@ -97,6 +97,28 @@ python -m glossary_generator my_dataset --publish
 A small FastAPI UI is included for the interactive flow — submit a dataset,
 review each mapping, then publish only the ones you approve.
 
+### Quick start (one command)
+
+```bash
+./scripts/bootstrap.sh --project my-gcp-project
+```
+
+That script:
+
+1. Enables required APIs (BigQuery, Dataplex, Vertex AI, Storage).
+2. Runs `gcloud auth application-default login` if ADC isn't set.
+3. Runs `pip install -r requirements.txt` if deps are missing.
+4. Builds the `industry-glossaries` RAG corpus (only if absent — ~5–15 min first time).
+5. Creates the `enterprise-glossary` Dataplex glossary if it doesn't exist.
+6. Launches `uvicorn webapp:app` on port 8080.
+
+Re-runs are safe: every step is idempotent and skipped when the resource
+already exists. Use flags (`--skip-corpus`, `--skip-serve`, `--glossary`,
+`--port`, …) to opt out of individual steps or customise names — see
+`./scripts/bootstrap.sh --help`.
+
+### Manual launch
+
 ```bash
 export GOOGLE_CLOUD_PROJECT=my-proj
 export DATAPLEX_GLOSSARY_ID=enterprise-glossary
