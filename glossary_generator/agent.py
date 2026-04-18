@@ -73,7 +73,6 @@ class GlossaryGeneratorAgent:
         ctx = self.bq.collect(
             dataset_id,
             max_tables=self.config.max_tables,
-            max_sample_rows=self.config.max_sample_rows,
             table_allowlist=table_allowlist,
         )
 
@@ -178,8 +177,8 @@ class GlossaryGeneratorAgent:
             )
         if col.top_values:
             parts.append(f"      top_values: {col.top_values[:5]}")
-        if col.sample_values:
-            parts.append(f"      sample: {col.sample_values[:5]}")
+        if col.min_value is not None or col.max_value is not None:
+            parts.append(f"      min={col.min_value}, max={col.max_value}")
         return "\n".join(parts)
 
     # ------------------------------------------------------------------ publishing

@@ -7,7 +7,11 @@ from typing import Any, Optional
 
 @dataclass
 class ColumnProfile:
-    """Profile for one column, assembled from BigQuery schema + Dataplex insights."""
+    """Profile for one column, assembled from BigQuery schema + Dataplex insights.
+
+    Statistical fields are populated only when a Dataplex DATA_PROFILE scan
+    has run against the table.
+    """
 
     name: str
     data_type: str
@@ -18,7 +22,6 @@ class ColumnProfile:
     top_values: list[Any] = field(default_factory=list)
     min_value: Optional[Any] = None
     max_value: Optional[Any] = None
-    sample_values: list[Any] = field(default_factory=list)
 
 
 @dataclass

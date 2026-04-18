@@ -60,6 +60,7 @@ pre {
   margin-bottom: 20px;
 }
 .card.error { border-color: var(--err); }
+.card.warning-card { border-color: var(--warn); }
 
 label {
   display: block;

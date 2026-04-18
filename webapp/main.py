@@ -33,6 +33,7 @@ from google.cloud import bigquery
 
 from glossary_generator.agent import GlossaryGeneratorAgent
 from glossary_generator.config import AgentConfig
+from glossary_generator.dataplex_client import MissingDataplexScansError
 from glossary_generator.glossary_publisher import GlossaryPublisher
 from glossary_generator.models import ColumnMapping, GlossarySuggestion, TermSuggestion
 
@@ -187,6 +188,19 @@ async def suggest(
             instructions=instructions,
             table_allowlist=table_allowlist or None,
             publish=False,
+        )
+    except MissingDataplexScansError as exc:
+        return templates.TemplateResponse(
+            "needs_scans.html",
+            {
+                "request": request,
+                "project_id": exc.project_id,
+                "dataset_id": exc.dataset_id,
+                "region": exc.region,
+                "tables": exc.tables,
+                "commands": exc.remediation_commands(),
+            },
+            status_code=412,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Agent failed")

@@ -31,7 +31,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--table", action="append", dest="tables", help="Limit to this table (repeatable)")
     p.add_argument("--max-tables", type=int, default=50)
-    p.add_argument("--max-sample-rows", type=int, default=10)
     p.add_argument("--publish", action="store_true", help="Actually write to the glossary")
     p.add_argument("--verbose", "-v", action="count", default=0)
     return p
@@ -53,7 +52,6 @@ def main(argv: list[str] | None = None) -> int:
         glossary_id=args.glossary_id,
         glossary_location=args.glossary_location,
         max_tables=args.max_tables,
-        max_sample_rows=args.max_sample_rows,
         publish=args.publish,
     )
 

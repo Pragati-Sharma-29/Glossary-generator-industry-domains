@@ -11,6 +11,12 @@
     <code>{{ rag_corpus_display_name }}</code>
     (resolved automatically from your project).
   </p>
+  <p class="meta">
+    <strong>Prerequisite:</strong> the selected tables must have a Dataplex
+    <code>DATA_PROFILE</code> (and ideally <code>DATA_INSIGHTS</code>) scan
+    available — the agent will not run without that evidence. If a scan is
+    missing you'll see exact <code>gcloud</code> commands to create it.
+  </p>
 
   <form method="post" action="/suggest" id="gen-form">
     <div class="inline-field">
