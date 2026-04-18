@@ -1,6 +1,25 @@
 {% extends "base.html" %}
 {% block title %}Review suggestions · Glossary Generator{% endblock %}
 {% block content %}
+{% if tables_without_scans %}
+<section class="card warning-card">
+  <h3>Recommendations may be less accurate</h3>
+  <p>
+    The following table(s) had no Dataplex <code>DATA_PROFILE</code> or
+    <code>DATA_INSIGHTS</code> scan available, so the agent only had their
+    schema (no statistics) to work with — confidence on related mappings
+    will be lower:
+  </p>
+  <ul>
+    {% for t in tables_without_scans %}<li><code>{{ t }}</code></li>{% endfor %}
+  </ul>
+  <p class="meta">
+    Run a profile and insights scan on these tables for stronger results
+    next time.
+  </p>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Review suggestions</h2>
   <p class="meta">

@@ -82,7 +82,10 @@ class GlossaryGeneratorAgent:
         logger.info("Prompting Vertex (%s) with RAG grounding", self.config.vertex_model)
         suggestion = self._invoke_llm(ctx, instructions)
 
-        result: dict = {"suggestion": suggestion.to_dict()}
+        result: dict = {
+            "suggestion": suggestion.to_dict(),
+            "tables_without_scans": list(ctx.tables_without_scans),
+        }
 
         publish = self.config.publish if publish is None else publish
         if publish:
@@ -138,12 +141,20 @@ class GlossaryGeneratorAgent:
         tables_block = "\n\n".join(
             self._summarise_table(t) for t in ctx.tables
         )
+        instr = instructions.strip() or "(none)"
+        if ctx.tables_without_scans:
+            instr += (
+                "\n\nNOTE: the following table(s) have no Dataplex DATA_PROFILE "
+                "or DATA_INSIGHTS scan available, so only their schema (no "
+                "statistics) is provided. Be more conservative in confidence "
+                f"scores for mappings on them: {', '.join(ctx.tables_without_scans)}."
+            )
         return DATASET_SUMMARY_TEMPLATE.format(
             project_id=ctx.project_id,
             dataset_id=ctx.dataset_id,
             location=ctx.location or "",
             description=ctx.description or "(no description)",
-            user_instructions=instructions.strip() or "(none)",
+            user_instructions=instr,
             tables_block=tables_block,
         )
 

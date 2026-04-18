@@ -1,21 +1,20 @@
 """Enrich tables with Dataplex data profile / data insights results.
 
-Dataplex exposes two relevant DataScan types:
+Two relevant DataScan types are consulted:
 
 * ``DATA_PROFILE`` — column-level statistics (null %, distinct %, top values,
   min/max).
-* ``DATA_INSIGHTS`` — Gemini-generated natural-language insights and sample
-  questions about the table.
+* ``DATA_INSIGHTS`` — Gemini-generated natural-language summaries.
 
-The collector fetches the most recent successful job for any scan whose
-source resource matches a BigQuery table in the supplied
-:class:`DatasetContext` and folds the statistics back onto the
-``ColumnProfile`` / ``TableProfile`` objects.
+The collector first does a single ``list_data_scans`` call to learn which
+tables in the dataset already have a published scan. For every table it
+then **only** calls ``get_data_scan`` when a matching scan exists — tables
+without a scan trigger no API calls and are recorded in
+``DatasetContext.tables_without_scans`` so the agent and UI can warn the
+user that those recommendations will be schema-only.
 
-If **no** scans of either type are found for any of the requested tables,
-:class:`MissingDataplexScansError` is raised — the agent treats high-quality
-suggestions as dependent on profile/insight context and refuses to run
-blind.
+Enrichment is fail-soft: if the listing call itself errors (e.g. missing
+permission), the collector logs and returns ``ctx`` unchanged.
 """
 from __future__ import annotations
 
@@ -30,57 +29,6 @@ from .models import ColumnProfile, DatasetContext, TableProfile
 logger = logging.getLogger(__name__)
 
 
-class MissingDataplexScansError(Exception):
-    """No Dataplex profile or insights scans exist for the requested tables.
-
-    The web app catches this and renders a remediation page with the exact
-    ``gcloud dataplex datascans`` commands to run.
-    """
-
-    def __init__(
-        self,
-        project_id: str,
-        dataset_id: str,
-        region: str,
-        tables: list[str],
-    ):
-        self.project_id = project_id
-        self.dataset_id = dataset_id
-        self.region = region
-        self.tables = tables
-        super().__init__(
-            f"No Dataplex DATA_PROFILE or DATA_INSIGHTS scans found for any "
-            f"of the {len(tables)} selected tables in "
-            f"{project_id}.{dataset_id} (region={region})."
-        )
-
-    def remediation_commands(self) -> list[str]:
-        """Return ``gcloud`` commands the operator should run."""
-        out: list[str] = []
-        for table in self.tables:
-            scan_id = f"profile-{self.dataset_id}-{table}"[:63]
-            insights_id = f"insights-{self.dataset_id}-{table}"[:63]
-            resource = (
-                f"//bigquery.googleapis.com/projects/{self.project_id}"
-                f"/datasets/{self.dataset_id}/tables/{table}"
-            )
-            out.append(
-                f"gcloud dataplex datascans create data-profile {scan_id} "
-                f"--project={self.project_id} --location={self.region} "
-                f"--data-source-resource='{resource}'"
-            )
-            out.append(
-                f"gcloud dataplex datascans run {scan_id} "
-                f"--project={self.project_id} --location={self.region}"
-            )
-            out.append(
-                f"gcloud dataplex datascans create data-discovery {insights_id} "
-                f"--project={self.project_id} --location={self.region} "
-                f"--data-source-resource='{resource}'"
-            )
-        return out
-
-
 class DataplexInsightsCollector:
     def __init__(
         self,
@@ -90,18 +38,24 @@ class DataplexInsightsCollector:
     ):
         self.project_id = project_id
         self.location = location
-        self._client = client or dataplex_v1.DataScanServiceClient()
+        self._client_factory = lambda: client or dataplex_v1.DataScanServiceClient()
+        self._client: Optional[dataplex_v1.DataScanServiceClient] = client
 
     def enrich(self, ctx: DatasetContext) -> DatasetContext:
-        """Attach data-profile/insights results to every table in ``ctx``.
+        """Attach data-profile/insights to tables that have scans.
 
-        Raises
-        ------
-        MissingDataplexScansError
-            If none of the tables in ``ctx`` have a profile or insights scan.
+        Tables without a scan are skipped — no per-table API call is made —
+        and recorded in ``ctx.tables_without_scans``.
         """
         scans = self._list_scans()
-        tables_with_scan: list[str] = []
+        if not scans:
+            ctx.tables_without_scans = [t.table_id for t in ctx.tables]
+            logger.info(
+                "No Dataplex scans found in %s/%s; proceeding with schema only.",
+                self.project_id, self.location,
+            )
+            return ctx
+
         for table in ctx.tables:
             resource_name = (
                 f"//bigquery.googleapis.com/projects/{ctx.project_id}/"
@@ -109,38 +63,41 @@ class DataplexInsightsCollector:
             )
             profile_scan = scans.get(("DATA_PROFILE", resource_name))
             insights_scan = scans.get(("DATA_INSIGHTS", resource_name))
+
             if not profile_scan and not insights_scan:
+                ctx.tables_without_scans.append(table.table_id)
                 continue
+
             if profile_scan:
                 self._apply_profile(table, profile_scan)
             if insights_scan:
                 table.dataplex_insights = self._fetch_insights(insights_scan)
-            tables_with_scan.append(table.table_id)
 
-        if not tables_with_scan and ctx.tables:
-            raise MissingDataplexScansError(
-                project_id=ctx.project_id,
-                dataset_id=ctx.dataset_id,
-                region=self.location,
-                tables=[t.table_id for t in ctx.tables],
-            )
-
-        skipped = [t.table_id for t in ctx.tables if t.table_id not in tables_with_scan]
-        if skipped:
+        if ctx.tables_without_scans:
             logger.warning(
-                "Proceeding without Dataplex context for %d table(s): %s",
-                len(skipped), ", ".join(skipped),
+                "Schema-only (no Dataplex scan) for %d table(s): %s",
+                len(ctx.tables_without_scans),
+                ", ".join(ctx.tables_without_scans),
             )
         return ctx
 
     # ------------------------------------------------------------------ scan listing
 
+    def _get_client(self) -> dataplex_v1.DataScanServiceClient:
+        if self._client is None:
+            self._client = self._client_factory()
+        return self._client
+
     def _list_scans(self) -> dict[tuple[str, str], str]:
-        """Return a ``(scan_type, resource_name) -> scan_name`` lookup."""
+        """Return a ``(scan_type, resource_name) -> scan_name`` lookup.
+
+        Returns an empty dict on any failure — enrichment then becomes a
+        no-op rather than blocking the agent.
+        """
         parent = f"projects/{self.project_id}/locations/{self.location}"
         scans: dict[tuple[str, str], str] = {}
         try:
-            for scan in self._client.list_data_scans(parent=parent):
+            for scan in self._get_client().list_data_scans(parent=parent):
                 scan_type = dataplex_v1.DataScanType(scan.type_).name
                 resource = scan.data.resource if scan.data else ""
                 if resource:
@@ -153,7 +110,7 @@ class DataplexInsightsCollector:
 
     def _apply_profile(self, table: TableProfile, scan_name: str) -> None:
         try:
-            scan = self._client.get_data_scan(
+            scan = self._get_client().get_data_scan(
                 name=scan_name,
                 view=dataplex_v1.GetDataScanRequest.DataScanView.FULL,
             )
@@ -186,7 +143,7 @@ class DataplexInsightsCollector:
 
     def _fetch_insights(self, scan_name: str) -> Optional[dict]:
         try:
-            scan = self._client.get_data_scan(
+            scan = self._get_client().get_data_scan(
                 name=scan_name,
                 view=dataplex_v1.GetDataScanRequest.DataScanView.FULL,
             )

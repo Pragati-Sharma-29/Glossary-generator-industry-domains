@@ -40,6 +40,9 @@ class DatasetContext:
     location: Optional[str] = None
     description: Optional[str] = None
     tables: list[TableProfile] = field(default_factory=list)
+    # Populated by DataplexInsightsCollector.enrich() — tables that the
+    # collector skipped because no DATA_PROFILE / DATA_INSIGHTS scan existed.
+    tables_without_scans: list[str] = field(default_factory=list)
 
 
 @dataclass

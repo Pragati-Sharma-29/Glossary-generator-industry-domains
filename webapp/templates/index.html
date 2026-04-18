@@ -12,10 +12,10 @@
     (resolved automatically from your project).
   </p>
   <p class="meta">
-    <strong>Prerequisite:</strong> the selected tables must have a Dataplex
-    <code>DATA_PROFILE</code> (and ideally <code>DATA_INSIGHTS</code>) scan
-    available — the agent will not run without that evidence. If a scan is
-    missing you'll see exact <code>gcloud</code> commands to create it.
+    <strong>Recommended:</strong> run a Dataplex <code>DATA_PROFILE</code>
+    (and ideally <code>DATA_INSIGHTS</code>) scan on the tables first.
+    The agent uses those statistics as evidence; tables without a scan
+    are still processed but with schema only and lower confidence.
   </p>
 
   <form method="post" action="/suggest" id="gen-form">

@@ -38,11 +38,13 @@ Components:
    * `roles/dataplex.dataScanViewer`
    * `roles/aiplatform.user`
    * `roles/dataplex.glossaryEditor` (only when publishing)
-2. Dataplex `DATA_PROFILE` (and ideally `DATA_INSIGHTS`) scans **must** have
-   been run against the target tables before invocation. The agent reads the
-   latest results as evidence and **refuses to run** if no scans exist for
-   any selected table — see `MissingDataplexScansError`. The web app surfaces
-   exact `gcloud dataplex datascans create` commands when this happens.
+2. Dataplex `DATA_PROFILE` (and ideally `DATA_INSIGHTS`) scans should be
+   run against the target tables for the strongest recommendations. The
+   collector calls `get_data_scan` only when a matching scan is found in
+   the project listing — tables without a scan trigger no extra Dataplex
+   API calls and are processed schema-only. Their names are returned in
+   `result["tables_without_scans"]` and the web app surfaces a warning
+   banner so the operator knows to create scans for higher confidence.
 3. A Vertex AI RAG corpus populated with the glossary material you want the
    agent to ground against (FIBO, HL7, GS1, internal stewardship PDFs, …).
 
