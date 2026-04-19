@@ -1,4 +1,10 @@
-"""Collect schema, descriptions, and small samples from BigQuery."""
+"""Collect schema and descriptions from BigQuery.
+
+The collector intentionally does **not** sample table rows. Statistical
+context (distinct ratio, top values, etc.) must be supplied by Dataplex
+``DATA_PROFILE`` and ``DATA_INSIGHTS`` scans — see
+:mod:`glossary_generator.dataplex_client`.
+"""
 from __future__ import annotations
 
 import logging
@@ -21,7 +27,6 @@ class BigQueryCollector:
         dataset_id: str,
         *,
         max_tables: int = 50,
-        max_sample_rows: int = 10,
         table_allowlist: Optional[Iterable[str]] = None,
     ) -> DatasetContext:
         """Return a populated DatasetContext for the requested dataset."""
@@ -40,11 +45,7 @@ class BigQueryCollector:
             if allow and item.table_id not in allow:
                 continue
             try:
-                ctx.tables.append(
-                    self._profile_table(
-                        dataset_ref, item.table_id, max_sample_rows=max_sample_rows
-                    )
-                )
+                ctx.tables.append(self._profile_table(dataset_ref, item.table_id))
             except Exception as exc:  # noqa: BLE001 - surface but don't abort
                 logger.warning("Skipping %s: %s", item.table_id, exc)
         return ctx
@@ -59,8 +60,6 @@ class BigQueryCollector:
         self,
         dataset_ref: bigquery.DatasetReference,
         table_id: str,
-        *,
-        max_sample_rows: int,
     ) -> TableProfile:
         table = self._client.get_table(dataset_ref.table(table_id))
         columns = [
@@ -72,27 +71,9 @@ class BigQueryCollector:
             )
             for field in table.schema
         ]
-        profile = TableProfile(
+        return TableProfile(
             table_id=table.table_id,
             description=table.description,
             row_count=table.num_rows,
             columns=columns,
         )
-        if max_sample_rows > 0:
-            self._attach_samples(table, profile, max_sample_rows)
-        return profile
-
-    def _attach_samples(
-        self, table: bigquery.Table, profile: TableProfile, max_sample_rows: int
-    ) -> None:
-        """Pull a tiny sample of rows so the LLM can reason about content."""
-        try:
-            rows = self._client.list_rows(table, max_results=max_sample_rows)
-            sample_map: dict[str, list] = {c.name: [] for c in profile.columns}
-            for row in rows:
-                for name in sample_map:
-                    sample_map[name].append(row.get(name))
-            for col in profile.columns:
-                col.sample_values = sample_map.get(col.name, [])
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Could not sample %s: %s", table.table_id, exc)

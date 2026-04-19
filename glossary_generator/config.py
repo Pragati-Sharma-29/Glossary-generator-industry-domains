@@ -27,7 +27,6 @@ class AgentConfig:
     glossary_location: str = "global"
 
     # Behaviour
-    max_sample_rows: int = 10
     max_tables: int = 50
     publish: bool = False  # dry-run by default
 

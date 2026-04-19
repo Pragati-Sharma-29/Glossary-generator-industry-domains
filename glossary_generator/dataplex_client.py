@@ -1,15 +1,20 @@
 """Enrich tables with Dataplex data profile / data insights results.
 
-Dataplex exposes two relevant DataScan types:
+Two relevant DataScan types are consulted:
 
 * ``DATA_PROFILE`` — column-level statistics (null %, distinct %, top values,
   min/max).
-* ``DATA_INSIGHTS`` — Gemini-generated natural-language insights and sample
-  questions about the table.
+* ``DATA_INSIGHTS`` — Gemini-generated natural-language summaries.
 
-We fetch the most recent successful job for any scan whose source resource
-matches the BigQuery table, and fold the statistics back onto the
-``ColumnProfile`` / ``TableProfile`` objects produced by ``BigQueryCollector``.
+The collector first does a single ``list_data_scans`` call to learn which
+tables in the dataset already have a published scan. For every table it
+then **only** calls ``get_data_scan`` when a matching scan exists — tables
+without a scan trigger no API calls and are recorded in
+``DatasetContext.tables_without_scans`` so the agent and UI can warn the
+user that those recommendations will be schema-only.
+
+Enrichment is fail-soft: if the listing call itself errors (e.g. missing
+permission), the collector logs and returns ``ctx`` unchanged.
 """
 from __future__ import annotations
 
@@ -33,11 +38,24 @@ class DataplexInsightsCollector:
     ):
         self.project_id = project_id
         self.location = location
-        self._client = client or dataplex_v1.DataScanServiceClient()
+        self._client_factory = lambda: client or dataplex_v1.DataScanServiceClient()
+        self._client: Optional[dataplex_v1.DataScanServiceClient] = client
 
     def enrich(self, ctx: DatasetContext) -> DatasetContext:
-        """Attach data-profile/insights results to every table in ``ctx``."""
+        """Attach data-profile/insights to tables that have scans.
+
+        Tables without a scan are skipped — no per-table API call is made —
+        and recorded in ``ctx.tables_without_scans``.
+        """
         scans = self._list_scans()
+        if not scans:
+            ctx.tables_without_scans = [t.table_id for t in ctx.tables]
+            logger.info(
+                "No Dataplex scans found in %s/%s; proceeding with schema only.",
+                self.project_id, self.location,
+            )
+            return ctx
+
         for table in ctx.tables:
             resource_name = (
                 f"//bigquery.googleapis.com/projects/{ctx.project_id}/"
@@ -45,20 +63,41 @@ class DataplexInsightsCollector:
             )
             profile_scan = scans.get(("DATA_PROFILE", resource_name))
             insights_scan = scans.get(("DATA_INSIGHTS", resource_name))
+
+            if not profile_scan and not insights_scan:
+                ctx.tables_without_scans.append(table.table_id)
+                continue
+
             if profile_scan:
                 self._apply_profile(table, profile_scan)
             if insights_scan:
                 table.dataplex_insights = self._fetch_insights(insights_scan)
+
+        if ctx.tables_without_scans:
+            logger.warning(
+                "Schema-only (no Dataplex scan) for %d table(s): %s",
+                len(ctx.tables_without_scans),
+                ", ".join(ctx.tables_without_scans),
+            )
         return ctx
 
     # ------------------------------------------------------------------ scan listing
 
+    def _get_client(self) -> dataplex_v1.DataScanServiceClient:
+        if self._client is None:
+            self._client = self._client_factory()
+        return self._client
+
     def _list_scans(self) -> dict[tuple[str, str], str]:
-        """Return a ``(scan_type, resource_name) -> scan_name`` lookup."""
+        """Return a ``(scan_type, resource_name) -> scan_name`` lookup.
+
+        Returns an empty dict on any failure — enrichment then becomes a
+        no-op rather than blocking the agent.
+        """
         parent = f"projects/{self.project_id}/locations/{self.location}"
         scans: dict[tuple[str, str], str] = {}
         try:
-            for scan in self._client.list_data_scans(parent=parent):
+            for scan in self._get_client().list_data_scans(parent=parent):
                 scan_type = dataplex_v1.DataScanType(scan.type_).name
                 resource = scan.data.resource if scan.data else ""
                 if resource:
@@ -71,7 +110,7 @@ class DataplexInsightsCollector:
 
     def _apply_profile(self, table: TableProfile, scan_name: str) -> None:
         try:
-            scan = self._client.get_data_scan(
+            scan = self._get_client().get_data_scan(
                 name=scan_name,
                 view=dataplex_v1.GetDataScanRequest.DataScanView.FULL,
             )
@@ -93,7 +132,6 @@ class DataplexInsightsCollector:
                 {"value": tv.value, "count": tv.count}
                 for tv in getattr(stats, "top_n_values", [])
             ]
-            # Numeric/string profile sub-messages are union-typed; read defensively.
             for sub in ("integer_profile", "double_profile", "string_profile"):
                 info = getattr(stats, sub, None)
                 if info is None:
@@ -105,7 +143,7 @@ class DataplexInsightsCollector:
 
     def _fetch_insights(self, scan_name: str) -> Optional[dict]:
         try:
-            scan = self._client.get_data_scan(
+            scan = self._get_client().get_data_scan(
                 name=scan_name,
                 view=dataplex_v1.GetDataScanRequest.DataScanView.FULL,
             )
@@ -116,7 +154,6 @@ class DataplexInsightsCollector:
         )
         if result is None:
             return None
-        # The result proto differs between preview/GA; serialise to dict best-effort.
         try:
             from google.protobuf.json_format import MessageToDict
 

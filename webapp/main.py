@@ -25,9 +25,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+from google.cloud import bigquery
 
 from glossary_generator.agent import GlossaryGeneratorAgent
 from glossary_generator.config import AgentConfig
@@ -90,6 +92,45 @@ def _get_or_create_session_id(session_id: Optional[str], response: Response) -> 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
 
+# ── JSON endpoints for progressive form loading ─────────────────────────────
+
+@app.get("/api/datasets")
+def api_datasets(project_id: str) -> JSONResponse:
+    """List BigQuery datasets visible in a project."""
+    try:
+        client = bigquery.Client(project=project_id)
+        datasets = [
+            {
+                "dataset_id": ds.dataset_id,
+                "full_id": f"{ds.project}.{ds.dataset_id}",
+                "location": getattr(ds, "location", None),
+            }
+            for ds in client.list_datasets(project=project_id)
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("list_datasets failed for %s", project_id)
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"datasets": datasets})
+
+
+@app.get("/api/tables")
+def api_tables(project_id: str, dataset_id: str) -> JSONResponse:
+    """List tables in a dataset. ``dataset_id`` may be ``project.dataset``."""
+    try:
+        client = bigquery.Client(project=project_id)
+        ref = dataset_id if "." in dataset_id else f"{project_id}.{dataset_id}"
+        tables = [
+            {"table_id": t.table_id, "type": t.table_type}
+            for t in client.list_tables(ref)
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("list_tables failed for %s / %s", project_id, dataset_id)
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"tables": tables})
+
+
+# ── HTML routes ─────────────────────────────────────────────────────────────
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
@@ -105,7 +146,7 @@ def index(request: Request) -> HTMLResponse:
 
 
 @app.post("/suggest", response_class=HTMLResponse)
-def suggest(
+async def suggest(
     request: Request,
     response: Response,
     project_id: str = Form(...),
@@ -117,6 +158,9 @@ def suggest(
     session_id: Optional[str] = Cookie(None, alias="glossary_session"),
 ) -> HTMLResponse:
     sid = _get_or_create_session_id(session_id, response)
+
+    form = await request.form()
+    table_allowlist = [v for v in form.getlist("tables") if v]
 
     try:
         rag_corpus = _resolve_rag_corpus(project_id, location)
@@ -138,7 +182,12 @@ def suggest(
 
     try:
         agent = GlossaryGeneratorAgent(config)
-        result = agent.run(dataset_id, instructions=instructions, publish=False)
+        result = agent.run(
+            dataset_id,
+            instructions=instructions,
+            table_allowlist=table_allowlist or None,
+            publish=False,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Agent failed")
         return templates.TemplateResponse(
@@ -167,6 +216,7 @@ def suggest(
             "instructions": instructions,
             "glossary_id": glossary_id,
             "suggestion": result["suggestion"],
+            "tables_without_scans": result.get("tables_without_scans", []),
         },
     )
     # Preserve cookie set by _get_or_create_session_id

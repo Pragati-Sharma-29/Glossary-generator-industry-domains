@@ -38,8 +38,13 @@ Components:
    * `roles/dataplex.dataScanViewer`
    * `roles/aiplatform.user`
    * `roles/dataplex.glossaryEditor` (only when publishing)
-2. Dataplex `DATA_PROFILE` and/or `DATA_INSIGHTS` scans already run against
-   the target tables (the agent reads their latest results).
+2. Dataplex `DATA_PROFILE` (and ideally `DATA_INSIGHTS`) scans should be
+   run against the target tables for the strongest recommendations. The
+   collector calls `get_data_scan` only when a matching scan is found in
+   the project listing — tables without a scan trigger no extra Dataplex
+   API calls and are processed schema-only. Their names are returned in
+   `result["tables_without_scans"]` and the web app surfaces a warning
+   banner so the operator knows to create scans for higher confidence.
 3. A Vertex AI RAG corpus populated with the glossary material you want the
    agent to ground against (FIBO, HL7, GS1, internal stewardship PDFs, …).
 
@@ -96,6 +101,28 @@ python -m glossary_generator my_dataset --publish
 
 A small FastAPI UI is included for the interactive flow — submit a dataset,
 review each mapping, then publish only the ones you approve.
+
+### Quick start (one command)
+
+```bash
+./scripts/bootstrap.sh --project my-gcp-project
+```
+
+That script:
+
+1. Enables required APIs (BigQuery, Dataplex, Vertex AI, Storage).
+2. Runs `gcloud auth application-default login` if ADC isn't set.
+3. Runs `pip install -r requirements.txt` if deps are missing.
+4. Builds the `industry-glossaries` RAG corpus (only if absent — ~5–15 min first time).
+5. Creates the `enterprise-glossary` Dataplex glossary if it doesn't exist.
+6. Launches `uvicorn webapp:app` on port 8080.
+
+Re-runs are safe: every step is idempotent and skipped when the resource
+already exists. Use flags (`--skip-corpus`, `--skip-serve`, `--glossary`,
+`--port`, …) to opt out of individual steps or customise names — see
+`./scripts/bootstrap.sh --help`.
+
+### Manual launch
 
 ```bash
 export GOOGLE_CLOUD_PROJECT=my-proj

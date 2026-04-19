@@ -3,33 +3,58 @@
 {% block content %}
 <section class="card">
   <h2>Generate glossary suggestions</h2>
-  <p>Enter the BigQuery dataset you want to annotate. The agent will read its
-  schema and Dataplex data insights, infer the industry and domain, and
-  propose business-glossary terms mapped to columns.</p>
+  <p>Enter your GCP project, then pick a dataset. You can optionally narrow
+  down which tables the agent should annotate.</p>
 
   <p class="meta">
     Grounding: Vertex AI RAG corpus
     <code>{{ rag_corpus_display_name }}</code>
     (resolved automatically from your project).
   </p>
+  <p class="meta">
+    <strong>Recommended:</strong> run a Dataplex <code>DATA_PROFILE</code>
+    (and ideally <code>DATA_INSIGHTS</code>) scan on the tables first.
+    The agent uses those statistics as evidence; tables without a scan
+    are still processed but with schema only and lower confidence.
+  </p>
 
-  <form method="post" action="/suggest">
-    <label>
-      GCP project id
-      <input type="text" name="project_id" required
-             value="{{ default_project }}" placeholder="my-project">
+  <form method="post" action="/suggest" id="gen-form">
+    <div class="inline-field">
+      <label>
+        GCP project id
+        <input type="text" id="project_id" name="project_id" required
+               value="{{ default_project }}" placeholder="my-project">
+      </label>
+      <button type="button" id="load-datasets" class="secondary-btn">
+        Load datasets
+      </button>
+    </div>
+    <p id="datasets-status" class="status"></p>
+
+    <label id="dataset-wrap" hidden>
+      BigQuery dataset
+      <select id="dataset_id" name="dataset_id" required>
+        <option value="">— select a dataset —</option>
+      </select>
     </label>
 
-    <label>
-      BigQuery dataset id
-      <input type="text" name="dataset_id" required
-             placeholder="project.dataset  or  dataset_name">
-    </label>
+    <fieldset id="tables-wrap" hidden>
+      <legend>
+        Tables to include
+        <span class="hint">(leave all checked to scan the whole dataset)</span>
+      </legend>
+      <div class="bulk">
+        <button type="button" onclick="setAllTables(true)">All</button>
+        <button type="button" onclick="setAllTables(false)">None</button>
+        <span id="table-count" class="meta"></span>
+      </div>
+      <div id="tables-list" class="tables-list"></div>
+    </fieldset>
 
     <label>
       Instructions <span class="hint">(optional)</span>
       <textarea name="instructions" rows="3"
-                placeholder="e.g. P&amp;C insurance claims mart; use ACORD vocabulary"></textarea>
+                placeholder="e.g. P&amp;C insurance claims mart; prefer ACORD vocabulary"></textarea>
     </label>
 
     <details>
@@ -53,7 +78,106 @@
       </label>
     </details>
 
-    <button type="submit" class="primary">Generate suggestions</button>
+    <button type="submit" class="primary" id="submit-btn" disabled>
+      Generate suggestions
+    </button>
   </form>
 </section>
+
+<script>
+  const projectInput  = document.getElementById("project_id");
+  const loadBtn       = document.getElementById("load-datasets");
+  const dsStatus      = document.getElementById("datasets-status");
+  const dsWrap        = document.getElementById("dataset-wrap");
+  const dsSelect      = document.getElementById("dataset_id");
+  const tablesWrap    = document.getElementById("tables-wrap");
+  const tablesList    = document.getElementById("tables-list");
+  const tableCount    = document.getElementById("table-count");
+  const submitBtn     = document.getElementById("submit-btn");
+
+  loadBtn.addEventListener("click", loadDatasets);
+  projectInput.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); loadDatasets(); }
+  });
+  dsSelect.addEventListener("change", loadTables);
+
+  async function loadDatasets() {
+    const project = projectInput.value.trim();
+    if (!project) { dsStatus.textContent = "Enter a project id first."; return; }
+    dsStatus.textContent = "Loading datasets…";
+    dsWrap.hidden = true;
+    tablesWrap.hidden = true;
+    submitBtn.disabled = true;
+    try {
+      const resp = await fetch(`/api/datasets?project_id=${encodeURIComponent(project)}`);
+      const body = await resp.json();
+      if (!resp.ok) throw new Error(body.error || "Failed to list datasets");
+      const items = body.datasets;
+      dsSelect.innerHTML = '<option value="">— select a dataset —</option>';
+      for (const ds of items) {
+        const opt = document.createElement("option");
+        opt.value = ds.dataset_id;
+        opt.textContent = ds.dataset_id + (ds.location ? `  (${ds.location})` : "");
+        dsSelect.appendChild(opt);
+      }
+      dsStatus.textContent = `${items.length} dataset${items.length === 1 ? "" : "s"} found.`;
+      dsWrap.hidden = false;
+    } catch (err) {
+      dsStatus.textContent = "Error: " + err.message;
+    }
+  }
+
+  async function loadTables() {
+    const project = projectInput.value.trim();
+    const dataset = dsSelect.value;
+    tablesWrap.hidden = true;
+    tablesList.innerHTML = "";
+    submitBtn.disabled = true;
+    if (!dataset) return;
+
+    tableCount.textContent = "Loading…";
+    tablesWrap.hidden = false;
+    try {
+      const url = `/api/tables?project_id=${encodeURIComponent(project)}`
+                + `&dataset_id=${encodeURIComponent(dataset)}`;
+      const resp = await fetch(url);
+      const body = await resp.json();
+      if (!resp.ok) throw new Error(body.error || "Failed to list tables");
+      const items = body.tables;
+      for (const t of items) {
+        const id = `tbl-${t.table_id}`;
+        const row = document.createElement("label");
+        row.className = "table-row";
+        row.innerHTML = `
+          <input type="checkbox" name="tables" id="${id}"
+                 value="${t.table_id}" checked>
+          <span class="tname">${t.table_id}</span>
+          <span class="ttype">${t.type}</span>
+        `;
+        tablesList.appendChild(row);
+      }
+      updateCount();
+      tablesList.addEventListener("change", updateCount);
+      submitBtn.disabled = items.length === 0;
+    } catch (err) {
+      tableCount.textContent = "Error: " + err.message;
+    }
+  }
+
+  function updateCount() {
+    const all = tablesList.querySelectorAll('input[name="tables"]');
+    const checked = tablesList.querySelectorAll('input[name="tables"]:checked');
+    tableCount.textContent = `${checked.length} / ${all.length} selected`;
+    submitBtn.disabled = checked.length === 0;
+  }
+
+  function setAllTables(state) {
+    tablesList.querySelectorAll('input[name="tables"]')
+      .forEach(cb => cb.checked = state);
+    updateCount();
+  }
+
+  // Auto-load datasets if the project id was pre-filled.
+  if (projectInput.value.trim()) { loadDatasets(); }
+</script>
 {% endblock %}
