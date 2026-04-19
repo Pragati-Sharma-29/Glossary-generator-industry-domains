@@ -106,6 +106,11 @@ answer. Ground every term you propose in evidence from the dataset AND — when
 possible — in retrieved glossary material. For each proposed mapping, cite the
 column evidence (name, type, profile stat, top values) that justifies it.
 
+Return at most {max_mappings_per_table} mappings per table. When a table has
+more candidate columns than that, keep the highest-confidence, most business-
+meaningful ones (keys, domain-specific codes, monetary amounts, timestamps
+with business meaning) and drop generic operational columns.
+
 {dataset_summary}
 
 Return a JSON object with keys: industry, domain, rationale, terms, mappings.

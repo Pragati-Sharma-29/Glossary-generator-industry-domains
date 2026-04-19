@@ -98,13 +98,45 @@ class GlossaryGeneratorAgent:
         self, ctx: DatasetContext, instructions: str
     ) -> GlossarySuggestion:
         summary = self._summarise_dataset(ctx, instructions)
-        prompt = USER_PROMPT_TEMPLATE.format(dataset_summary=summary)
+        prompt = USER_PROMPT_TEMPLATE.format(
+            dataset_summary=summary,
+            max_mappings_per_table=self.config.max_mappings_per_table,
+        )
         raw = self.vertex.generate_json(
             prompt,
             system_instruction=SYSTEM_INSTRUCTION,
             response_schema=RESPONSE_SCHEMA,
         )
-        return self._parse_response(raw)
+        suggestion = self._parse_response(raw)
+        suggestion.mappings = self._cap_mappings(
+            suggestion.mappings, self.config.max_mappings_per_table
+        )
+        return suggestion
+
+    @staticmethod
+    def _cap_mappings(
+        mappings: list[ColumnMapping], max_per_table: int
+    ) -> list[ColumnMapping]:
+        """Keep at most ``max_per_table`` highest-confidence mappings per table.
+
+        Guarantees the cap regardless of whether the model obeyed the prompt.
+        Preserves the relative order within a table (stable sort by
+        confidence descending).
+        """
+        by_table: dict[str, list[ColumnMapping]] = {}
+        for m in mappings:
+            by_table.setdefault(m.table_id, []).append(m)
+
+        kept: list[ColumnMapping] = []
+        for table_id, group in by_table.items():
+            group.sort(key=lambda x: x.confidence, reverse=True)
+            if len(group) > max_per_table:
+                logger.info(
+                    "Trimming %s from %d to %d mappings",
+                    table_id, len(group), max_per_table,
+                )
+            kept.extend(group[:max_per_table])
+        return kept
 
     @staticmethod
     def _parse_response(raw: dict) -> GlossarySuggestion:
