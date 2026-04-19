@@ -184,3 +184,172 @@ Mobile Virtual Network Operator (resells another's radio network) vs
 Mobile Network Operator (owns the radio network).
 
 - **Typical columns:** `mvno_flag`, `network_operator`, `brand_id`
+
+---
+
+# Network Management (FCAPS + 4G/5G Core)
+
+Grounded in TM Forum eTOM (Fault / Performance / Configuration), 3GPP TS
+28/32-series, and ITU-T M.3400. Use for OSS datasets: alarm stores,
+performance counter dumps, network-element inventories, handover logs,
+topology, and SLA reporting.
+
+## Network Element (NE)
+
+A managed node on the carrier's network: eNodeB/gNodeB, router, switch,
+MSC, MME, AMF, UPF, OLT. Identified by a unique NE ID and carries type,
+vendor, software version, and location.
+
+- **Synonyms:** Node, Managed Element, Device
+- **Typical columns:** `ne_id`, `node_id`, `element_id`, `device_id`,
+  `ne_type`, `vendor`, `sw_version`
+
+## Configuration Item (CI) / Parameter
+
+A configurable attribute on a Network Element (transmit power, neighbor
+list, PLMN, cell ID, handover threshold). Tracked by CM systems.
+
+- **Synonyms:** Config Parameter, MO (Managed Object)
+- **Typical columns:** `ci_id`, `parameter_name`, `mo_id`,
+  `attribute_name`, `current_value`, `target_value`
+
+## Alarm
+
+A Network Element's notification of a fault condition. Has severity,
+probable cause, event time, clear time, and affected NE. 3GPP TS 32.111
+defines the model.
+
+- **Synonyms:** Fault, Notification, Event (FM sense)
+- **Typical columns:** `alarm_id`, `alarm_number`, `event_time`,
+  `clear_time`, `probable_cause`, `specific_problem`, `managed_object`
+
+## Alarm Severity
+
+The urgency classification of an Alarm: Critical, Major, Minor, Warning,
+Indeterminate, Cleared (ITU-T X.733).
+
+- **Typical columns:** `severity`, `alarm_severity`, `perceived_severity`
+
+## Root Cause / Correlation
+
+The underlying Alarm or condition responsible for one or more derived
+alarms. Correlation engines group symptoms to a single root cause to
+reduce alarm storms.
+
+- **Typical columns:** `root_cause_id`, `correlation_id`,
+  `parent_alarm_id`, `is_root_cause`
+
+## KPI (Key Performance Indicator)
+
+A derived network performance metric: RAN accessibility, retainability,
+mobility success, integrity, availability. Aggregated from Counters per
+interval.
+
+- **Synonyms:** Metric, Performance Indicator
+- **Typical columns:** `kpi_id`, `kpi_name`, `kpi_value`,
+  `measurement_period`, `granularity`
+
+## Counter / Performance Measurement (PM)
+
+A raw counter collected from a Network Element at a measurement interval
+(typically 15 min). Examples: `RRC.ConnEstabAtt`, `PDCP.UpOctUl`,
+`HO.IntraFreqExecSuccNB`. Counters feed into KPIs.
+
+- **Synonyms:** PM Counter, Performance Sample
+- **Typical columns:** `counter_name`, `counter_value`, `start_time`,
+  `end_time`, `period_seconds`
+
+## Radio Quality (RSRP / RSRQ / SINR)
+
+LTE/5G signal quality measurements: Reference Signal Received Power,
+Quality, and Signal-to-Interference-plus-Noise Ratio. Captured in UE
+measurement reports and drive-test data.
+
+- **Typical columns:** `rsrp`, `rsrq`, `sinr`, `rssi`, `cqi`
+
+## Handover
+
+The event of a UE moving from one serving Cell to another while active.
+Has source cell, target cell, type (intra-frequency, inter-frequency,
+inter-RAT), and outcome (success, failure, ping-pong).
+
+- **Synonyms:** HO, Cell Reselection (idle mode)
+- **Typical columns:** `handover_id`, `source_cell`, `target_cell`,
+  `ho_type`, `ho_result`, `ho_duration_ms`
+
+## Throughput
+
+Data rate measured over a link or session. Uplink vs downlink; peak
+vs average.
+
+- **Typical columns:** `throughput_mbps`, `dl_throughput`,
+  `ul_throughput`, `peak_throughput`
+
+## Availability / MTBF / MTTR
+
+Reliability metrics per Network Element or Service: availability % over
+a window, Mean Time Between Failures, Mean Time To Repair.
+
+- **Typical columns:** `availability_pct`, `mtbf`, `mttr`,
+  `uptime_seconds`, `downtime_seconds`
+
+## Bearer (4G)
+
+An EPC logical connection carrying a QoS class for a UE's PDU traffic.
+Default Bearer is always-on; Dedicated Bearers carry specific QCI
+traffic.
+
+- **Typical columns:** `bearer_id`, `eps_bearer_id`, `qci`
+
+## PDU Session (5G)
+
+A logical 5G data connection between a UE and the UPF, carrying one or
+more QoS Flows, each with a 5QI. Successor to the 4G Bearer concept.
+
+- **Typical columns:** `pdu_session_id`, `dnn`, `snssai`,
+  `qos_flow_id`, `5qi`
+
+## Network Slice (5G)
+
+An isolated end-to-end logical network instance identified by S-NSSAI
+(Slice/Service Type + Slice Differentiator). Typical slice types:
+eMBB, URLLC, mMTC.
+
+- **Typical columns:** `slice_id`, `s_nssai`, `sst`, `sd`,
+  `slice_type`
+
+## Core Network Function (NF)
+
+A functional block in the core network. 4G EPC: MME, SGW, PGW, HSS,
+PCRF. 5G SA: AMF, SMF, UPF, UDM, PCF, NRF, AUSF.
+
+- **Synonyms:** Network Function, Core Node
+- **Typical columns:** `nf_type`, `nf_instance_id`, `nf_name`
+
+## Topology Link
+
+A physical or logical connection between two Network Elements:
+fiber span, microwave hop, logical tunnel. Used by inventory/GIS
+systems.
+
+- **Synonyms:** Link, Span, Circuit
+- **Typical columns:** `link_id`, `a_end_ne`, `z_end_ne`,
+  `link_type`, `capacity_mbps`, `distance_km`
+
+## Work Order / Change Request
+
+A tracked operational task against the network: truck roll, software
+upgrade, configuration change, capacity augment. Tied to a Change
+Advisory Board (CAB) approval in mature OSS.
+
+- **Synonyms:** Change Ticket, Task Order
+- **Typical columns:** `work_order_id`, `change_id`, `crq_number`,
+  `scheduled_start`, `actual_start`, `engineer_id`
+
+## SLA Compliance
+
+Measurement of contracted service levels against targets (availability,
+latency, packet loss). Breach records drive credits or penalties.
+
+- **Typical columns:** `sla_id`, `target_value`, `measured_value`,
+  `breach_flag`, `sla_credit_amount`
