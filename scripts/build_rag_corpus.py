@@ -536,7 +536,14 @@ def create_or_get_corpus(
     location: str,
     display_name: str,
 ) -> str:
-    """Return existing corpus resource name or create a new one."""
+    """Return existing corpus resource name or create a new one.
+
+    Uses RAG Engine **Serverless (KNN)** mode. Spanner (ANN) mode is the
+    historical default but is restricted to allowlisted projects in
+    us-central1/us-east1/us-east4 (see
+    https://cloud.google.com/vertex-ai/generative-ai/docs/rag-engine/switching-modes).
+    Serverless works in those regions for any new project.
+    """
     import vertexai
     from vertexai.preview import rag
 
@@ -547,16 +554,38 @@ def create_or_get_corpus(
             logger.info("Reusing existing corpus: %s", corpus.name)
             return corpus.name
 
-    logger.info("Creating new RAG corpus '%s'", display_name)
+    logger.info("Creating new RAG corpus '%s' (Serverless / KNN)", display_name)
+    backend_kwargs = {
+        "rag_embedding_model_config": rag.RagEmbeddingModelConfig(
+            vertex_prediction_endpoint=rag.VertexPredictionEndpoint(
+                publisher_model="publishers/google/models/text-embedding-005"
+            )
+        )
+    }
+    # Pin to Serverless / KNN if the SDK exposes it. Older SDKs fall back
+    # to the account-default mode.
+    RagManagedDb = getattr(rag, "RagManagedDb", None)
+    if RagManagedDb is not None:
+        try:
+            backend_kwargs["rag_managed_db"] = RagManagedDb(
+                retrieval_strategy=RagManagedDb.RetrievalStrategy.KNN
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Could not configure serverless (KNN) mode via RagManagedDb: %s. "
+                "Falling back to default; if you hit 'Spanner mode restricted', "
+                "upgrade google-cloud-aiplatform or choose a different --location.",
+                exc,
+            )
+    else:
+        logger.warning(
+            "Installed aiplatform SDK has no rag.RagManagedDb; Spanner mode may "
+            "fail in us-central1/us-east1/us-east4 for non-allowlisted projects."
+        )
+
     corpus = rag.create_corpus(
         display_name=display_name,
-        backend_config=rag.RagVectorDbConfig(
-            rag_embedding_model_config=rag.RagEmbeddingModelConfig(
-                vertex_prediction_endpoint=rag.VertexPredictionEndpoint(
-                    publisher_model="publishers/google/models/text-embedding-005"
-                )
-            )
-        ),
+        backend_config=rag.RagVectorDbConfig(**backend_kwargs),
     )
     return corpus.name
 
