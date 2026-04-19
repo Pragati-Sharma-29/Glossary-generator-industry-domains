@@ -51,35 +51,35 @@ columns:
 
 
 RESPONSE_SCHEMA = {
-    "type": "object",
+    "type": "OBJECT",
     "required": ["rationale", "terms", "mappings"],
     "properties": {
         "industry": {
-            "type": "string",
+            "type": "STRING",
             "description": "Inferred industry, or 'Unknown' if not confident.",
         },
         "domain": {
-            "type": "string",
+            "type": "STRING",
             "description": "Inferred business domain, or 'Unknown' if not confident.",
         },
-        "rationale": {"type": "string"},
+        "rationale": {"type": "STRING"},
         "terms": {
-            "type": "array",
+            "type": "ARRAY",
             "items": {
-                "type": "object",
+                "type": "OBJECT",
                 "required": ["display_name", "definition"],
                 "properties": {
-                    "display_name": {"type": "string"},
-                    "definition": {"type": "string"},
-                    "synonyms": {"type": "array", "items": {"type": "string"}},
-                    "related_terms": {"type": "array", "items": {"type": "string"}},
+                    "display_name": {"type": "STRING"},
+                    "definition": {"type": "STRING"},
+                    "synonyms": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "related_terms": {"type": "ARRAY", "items": {"type": "STRING"}},
                 },
             },
         },
         "mappings": {
-            "type": "array",
+            "type": "ARRAY",
             "items": {
-                "type": "object",
+                "type": "OBJECT",
                 "required": [
                     "term_display_name",
                     "table_id",
@@ -88,11 +88,11 @@ RESPONSE_SCHEMA = {
                     "rationale",
                 ],
                 "properties": {
-                    "term_display_name": {"type": "string"},
-                    "table_id": {"type": "string"},
-                    "column_name": {"type": "string"},
-                    "confidence": {"type": "number"},
-                    "rationale": {"type": "string"},
+                    "term_display_name": {"type": "STRING"},
+                    "table_id": {"type": "STRING"},
+                    "column_name": {"type": "STRING"},
+                    "confidence": {"type": "NUMBER"},
+                    "rationale": {"type": "STRING"},
                 },
             },
         },

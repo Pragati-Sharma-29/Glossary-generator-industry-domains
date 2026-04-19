@@ -536,7 +536,15 @@ def create_or_get_corpus(
     location: str,
     display_name: str,
 ) -> str:
-    """Return existing corpus resource name or create a new one."""
+    """Return existing corpus resource name or create a new one.
+
+    ``us-central1``, ``us-east1``, and ``us-east4`` restrict Spanner (ANN)
+    mode to allowlisted projects for new tenants. In those regions the
+    function forces RAG Engine **Serverless (KNN)** mode via
+    ``rag.RagManagedDb(retrieval_strategy=KNN)``. If the installed SDK
+    doesn't expose that class, it raises with a concrete remediation
+    pointing either at an SDK upgrade or a region switch.
+    """
     import vertexai
     from vertexai.preview import rag
 
@@ -547,17 +555,57 @@ def create_or_get_corpus(
             logger.info("Reusing existing corpus: %s", corpus.name)
             return corpus.name
 
-    logger.info("Creating new RAG corpus '%s'", display_name)
-    corpus = rag.create_corpus(
-        display_name=display_name,
-        backend_config=rag.RagVectorDbConfig(
-            rag_embedding_model_config=rag.RagEmbeddingModelConfig(
-                vertex_prediction_endpoint=rag.VertexPredictionEndpoint(
-                    publisher_model="publishers/google/models/text-embedding-005"
-                )
+    serverless_required_regions = {"us-central1", "us-east1", "us-east4"}
+    RagManagedDb = getattr(rag, "RagManagedDb", None)
+    needs_serverless = location in serverless_required_regions
+
+    if needs_serverless and RagManagedDb is None:
+        raise RuntimeError(
+            f"Region '{location}' requires RAG Engine Serverless (KNN) mode "
+            "for new projects, but this google-cloud-aiplatform SDK doesn't "
+            "expose rag.RagManagedDb. Two ways forward:\n"
+            "  1) Upgrade the SDK so RagManagedDb is available:\n"
+            "       pip install --upgrade 'google-cloud-aiplatform[rag]'\n"
+            "  2) Or rerun in a region that allows Spanner mode, e.g.\n"
+            "       ./scripts/build_rag_corpus.py --location europe-west4 ...\n"
+            "       (also pass --location europe-west4 to bootstrap.sh)"
+        )
+
+    backend_kwargs = {
+        "rag_embedding_model_config": rag.RagEmbeddingModelConfig(
+            vertex_prediction_endpoint=rag.VertexPredictionEndpoint(
+                publisher_model="publishers/google/models/text-embedding-005"
             )
-        ),
-    )
+        )
+    }
+    if needs_serverless:
+        logger.info(
+            "Forcing RAG Engine Serverless (KNN) mode for region %s", location
+        )
+        backend_kwargs["rag_managed_db"] = RagManagedDb(
+            retrieval_strategy=RagManagedDb.RetrievalStrategy.KNN
+        )
+
+    logger.info("Creating RAG corpus '%s' in %s", display_name, location)
+    try:
+        corpus = rag.create_corpus(
+            display_name=display_name,
+            backend_config=rag.RagVectorDbConfig(**backend_kwargs),
+        )
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if "Spanner mode" in msg and "restricted" in msg:
+            raise RuntimeError(
+                f"RAG Engine rejected the create_corpus call in '{location}':\n"
+                f"  {msg}\n\n"
+                "The installed SDK likely does not honour the Serverless "
+                "(KNN) directive. Rerun in a different region, e.g.:\n"
+                "  ./scripts/bootstrap.sh --project {} --location europe-west4\n"
+                "Supported regions: "
+                "https://cloud.google.com/vertex-ai/generative-ai/docs/"
+                "rag-engine/rag-overview#supported-regions".format(project_id)
+            ) from exc
+        raise
     return corpus.name
 
 
