@@ -134,9 +134,9 @@ def api_tables(project_id: str, dataset_id: str) -> JSONResponse:
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "default_project": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
             "default_glossary": os.environ.get("DATAPLEX_GLOSSARY_ID", ""),
             "default_location": os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
@@ -167,8 +167,9 @@ async def suggest(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Could not resolve RAG corpus")
         return templates.TemplateResponse(
+            request,
             "error.html",
-            {"request": request, "error": str(exc)},
+            {"error": str(exc)},
             status_code=500,
         )
 
@@ -191,8 +192,9 @@ async def suggest(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Agent failed")
         return templates.TemplateResponse(
+            request,
             "error.html",
-            {"request": request, "error": str(exc)},
+            {"error": str(exc)},
             status_code=500,
         )
 
@@ -209,9 +211,9 @@ async def suggest(
     }
 
     html = templates.TemplateResponse(
+        request,
         "suggestions.html",
         {
-            "request": request,
             "dataset_id": dataset_id,
             "instructions": instructions,
             "glossary_id": glossary_id,
@@ -280,9 +282,9 @@ async def publish(
     report = publisher.publish(filtered, dataset_id=bare_dataset)
 
     return templates.TemplateResponse(
+        request,
         "result.html",
         {
-            "request": request,
             "report": report,
             "approved_count": len(approved),
             "total_count": len(all_mappings),
