@@ -7,10 +7,10 @@
   down which tables the agent should annotate.</p>
 
   <p class="meta">
-    Grounding: per-domain Vertex AI RAG corpora
-    (display name prefix <code>{{ rag_corpus_prefix }}</code>). The agent
-    queries only the corpus for the industry you pick below, so healthcare
-    content can't bleed into retail suggestions.
+    Grounding: the agent infers the industry from your dataset's tables
+    and columns, then grounds suggestions in the matching per-domain
+    RAG corpus (prefix <code>{{ rag_corpus_prefix }}</code>). If you
+    want to override, mention the industry in the Instructions field.
   </p>
   <p class="meta">
     <strong>Recommended:</strong> run a Dataplex <code>DATA_PROFILE</code>
@@ -31,16 +31,6 @@
       </button>
     </div>
     <p id="datasets-status" class="status"></p>
-
-    <label>
-      Industry
-      <select name="domain" required>
-        <option value="">— pick an industry —</option>
-        {% for value, label in domain_choices %}
-          <option value="{{ value }}">{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
 
     <label id="dataset-wrap" hidden>
       BigQuery dataset
@@ -63,9 +53,9 @@
     </fieldset>
 
     <label>
-      Instructions <span class="hint">(optional)</span>
+      Instructions <span class="hint">(optional — use this to hint the industry or vocabulary)</span>
       <textarea name="instructions" rows="3"
-                placeholder="e.g. P&amp;C insurance claims mart; prefer ACORD vocabulary"></textarea>
+                placeholder="e.g. This is a retail loyalty mart. Or: P&amp;C insurance claims; prefer ACORD vocabulary."></textarea>
     </label>
 
     <details>

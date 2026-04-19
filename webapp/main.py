@@ -162,7 +162,6 @@ async def suggest(
     response: Response,
     project_id: str = Form(...),
     dataset_id: str = Form(...),
-    domain: str = Form(...),
     instructions: str = Form(""),
     location: str = Form("us-central1"),
     glossary_id: str = Form(""),
@@ -174,47 +173,35 @@ async def suggest(
     form = await request.form()
     table_allowlist = [v for v in form.getlist("tables") if v]
 
-    if domain not in DOMAIN_LABELS:
-        return templates.TemplateResponse(
-            request,
-            "error.html",
-            {"error": f"Unknown industry domain: {domain!r}"},
-            status_code=400,
-        )
-
-    try:
-        rag_corpus = _resolve_domain_corpus(project_id, location, domain)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Could not resolve RAG corpus")
-        return templates.TemplateResponse(
-            request,
-            "error.html",
-            {"error": f"{type(exc).__name__}: {exc}"},
-            status_code=500,
-        )
-
-    # Fold the picked industry into the instructions so the model knows to
-    # bias mapping vocabulary toward it (the RAG corpus is already scoped).
-    industry_hint = f"Industry hint: {DOMAIN_LABELS[domain]}."
-    instructions_combined = (
-        f"{industry_hint}\n{instructions}".strip()
-        if instructions.strip()
-        else industry_hint
-    )
+    # A corpus resolver closure is passed to the agent — when the agent's
+    # detector picks a domain, this callable returns the matching per-domain
+    # corpus resource name (or None if there isn't one). Detection failures
+    # propagate here as a skipped corpus, not an error response, so the
+    # agent can still produce schema-only suggestions.
+    def corpus_resolver(detected_domain: str) -> Optional[str]:
+        if detected_domain not in DOMAIN_LABELS:
+            return None
+        try:
+            return _resolve_domain_corpus(project_id, location, detected_domain)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "No corpus for detected domain %s: %s", detected_domain, exc
+            )
+            return None
 
     config = AgentConfig.from_env(
         project_id=project_id,
         location=location,
-        vertex_rag_corpus=rag_corpus,
+        vertex_rag_corpus=None,  # resolved at runtime via corpus_resolver
         glossary_id=glossary_id or None,
         glossary_location=glossary_location,
     )
 
     try:
-        agent = GlossaryGeneratorAgent(config)
+        agent = GlossaryGeneratorAgent(config, corpus_resolver=corpus_resolver)
         result = agent.run(
             dataset_id,
-            instructions=instructions_combined,
+            instructions=instructions,
             table_allowlist=table_allowlist or None,
             publish=False,
         )
@@ -227,6 +214,10 @@ async def suggest(
             status_code=500,
         )
 
+    detected = result.get("detected_industry") or {}
+    if detected.get("domain") in DOMAIN_LABELS:
+        detected["domain_label"] = DOMAIN_LABELS[detected["domain"]]
+
     _SESSIONS[sid] = {
         "config": {
             "project_id": project_id,
@@ -237,6 +228,7 @@ async def suggest(
         "dataset_id": dataset_id,
         "instructions": instructions,
         "suggestion": result["suggestion"],
+        "detected_industry": detected,
     }
 
     html = templates.TemplateResponse(
@@ -247,6 +239,7 @@ async def suggest(
             "instructions": instructions,
             "glossary_id": glossary_id,
             "suggestion": result["suggestion"],
+            "detected_industry": detected,
             "tables_without_scans": result.get("tables_without_scans", []),
         },
     )
