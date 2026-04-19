@@ -17,6 +17,7 @@ Swap ``_SESSIONS`` for Redis / Firestore to run multi-instance in production.
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
 import uuid
@@ -24,7 +25,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
+from fastapi import Cookie, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -41,6 +42,14 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 
 RAG_CORPUS_PREFIX = os.environ.get("VERTEX_RAG_CORPUS_PREFIX", "industry-glossaries")
+
+# Upload limits for the optional reference PDF attached to an /suggest
+# request. The text we extract is folded into the agent's ``instructions``
+# blob, which both the industry detector and the main LLM call see. 50k
+# characters ≈ 12k Gemini tokens — well under the 1M context window but
+# keeps the detection prompt from blowing up.
+MAX_PDF_BYTES = 10 * 1024 * 1024
+MAX_PDF_EXTRACTED_CHARS = 50_000
 
 DOMAIN_CHOICES = [
     ("retail_ecommerce", "Retail / E-commerce"),
@@ -87,6 +96,60 @@ def _resolve_domain_corpus(project_id: str, location: str, domain: str) -> str:
         f"  python scripts/build_rag_corpus.py --project {project_id} "
         f"--location {location} --domains {domain} --gcs-bucket <your-bucket>"
     )
+
+
+def _extract_pdf_text(upload: Optional[UploadFile]) -> str:
+    """Return text extracted from an uploaded PDF, or ``""``.
+
+    Best-effort: failures (encrypted PDF, malformed file, empty pages,
+    unsupported type) return an empty string with a logged warning, so
+    the request continues without the reference material rather than
+    failing outright. Enforces a 10 MB upload cap and truncates the
+    extracted text at 50 000 chars to keep the prompt bounded.
+
+    Raises ``ValueError`` for uploads that explicitly exceed the size
+    cap or are obviously not PDFs — those bubble up as 400s.
+    """
+    if upload is None or not upload.filename:
+        return ""
+
+    content_type = (upload.content_type or "").lower()
+    if content_type and "pdf" not in content_type and content_type != "application/octet-stream":
+        raise ValueError(
+            f"Reference document must be a PDF; got content-type {content_type!r}."
+        )
+
+    contents = upload.file.read(MAX_PDF_BYTES + 1)
+    if len(contents) > MAX_PDF_BYTES:
+        raise ValueError(
+            f"PDF exceeds the {MAX_PDF_BYTES // 1024 // 1024} MB upload limit."
+        )
+    if not contents:
+        return ""
+
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:  # defensive: requirement is declared
+        logger.error("pypdf not installed: %s", exc)
+        return ""
+
+    try:
+        reader = PdfReader(io.BytesIO(contents))
+        pages_text = [(p.extract_text() or "") for p in reader.pages]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PDF extraction failed for %s: %s", upload.filename, exc)
+        return ""
+
+    text = "\n\n".join(t.strip() for t in pages_text if t.strip())
+    if not text:
+        return ""
+    if len(text) > MAX_PDF_EXTRACTED_CHARS:
+        text = text[:MAX_PDF_EXTRACTED_CHARS] + "\n\n[... PDF truncated ...]"
+    logger.info(
+        "Extracted %d chars from %s (%d pages)",
+        len(text), upload.filename, len(pages_text),
+    )
+    return text
 
 
 def _get_or_create_session_id(session_id: Optional[str], response: Response) -> str:
@@ -166,12 +229,29 @@ async def suggest(
     location: str = Form("europe-west4"),
     glossary_id: str = Form(""),
     glossary_location: str = Form("global"),
+    reference_pdf: Optional[UploadFile] = File(None),
     session_id: Optional[str] = Cookie(None, alias="glossary_session"),
 ) -> HTMLResponse:
     sid = _get_or_create_session_id(session_id, response)
 
     form = await request.form()
     table_allowlist = [v for v in form.getlist("tables") if v]
+
+    try:
+        pdf_text = _extract_pdf_text(reference_pdf)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"error": str(exc)},
+            status_code=400,
+        )
+    if pdf_text:
+        instructions = (
+            f"{instructions}\n\n"
+            f"## Reference document: {reference_pdf.filename}\n\n"
+            f"{pdf_text}"
+        ).strip()
 
     # A corpus resolver closure is passed to the agent — when the agent's
     # detector picks a domain, this callable returns the matching per-domain

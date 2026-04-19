@@ -19,7 +19,7 @@
     are still processed but with schema only and lower confidence.
   </p>
 
-  <form method="post" action="/suggest" id="gen-form">
+  <form method="post" action="/suggest" id="gen-form" enctype="multipart/form-data">
     <div class="inline-field">
       <label>
         GCP project id
@@ -56,6 +56,11 @@
       Instructions <span class="hint">(optional — use this to hint the industry or vocabulary)</span>
       <textarea name="instructions" rows="3"
                 placeholder="e.g. This is a retail loyalty mart. Or: P&amp;C insurance claims; prefer ACORD vocabulary."></textarea>
+    </label>
+
+    <label>
+      Reference PDF <span class="hint">(optional — an internal glossary, style guide, or spec up to 10 MB; text is extracted and folded into the instructions)</span>
+      <input type="file" name="reference_pdf" accept="application/pdf">
     </label>
 
     <details>
