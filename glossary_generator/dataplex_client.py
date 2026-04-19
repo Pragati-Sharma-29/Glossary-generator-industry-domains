@@ -106,14 +106,28 @@ class DataplexInsightsCollector:
             logger.warning("Unable to list Dataplex scans: %s", exc)
         return scans
 
+    def _get_full_scan(self, scan_name: str):
+        """Fetch a DataScan with FULL view, working around SDK version drift.
+
+        Older google-cloud-dataplex versions expose ``view`` only on
+        ``GetDataScanRequest`` (not as a keyword on the method), and some
+        lack the enum entirely. Try the request-object path first; if the
+        enum is missing, fall back to a plain ``name``-only request (which
+        returns BASIC view but is still usable).
+        """
+        client = self._get_client()
+        try:
+            view_enum = dataplex_v1.GetDataScanRequest.DataScanView.FULL
+            request = dataplex_v1.GetDataScanRequest(name=scan_name, view=view_enum)
+        except (AttributeError, TypeError):
+            request = dataplex_v1.GetDataScanRequest(name=scan_name)
+        return client.get_data_scan(request=request)
+
     # ------------------------------------------------------------------ data profile
 
     def _apply_profile(self, table: TableProfile, scan_name: str) -> None:
         try:
-            scan = self._get_client().get_data_scan(
-                name=scan_name,
-                view=dataplex_v1.GetDataScanRequest.DataScanView.FULL,
-            )
+            scan = self._get_full_scan(scan_name)
         except NotFound:
             return
         latest = getattr(scan.data_profile_result, "profile", None)
@@ -143,10 +157,7 @@ class DataplexInsightsCollector:
 
     def _fetch_insights(self, scan_name: str) -> Optional[dict]:
         try:
-            scan = self._get_client().get_data_scan(
-                name=scan_name,
-                view=dataplex_v1.GetDataScanRequest.DataScanView.FULL,
-            )
+            scan = self._get_full_scan(scan_name)
         except NotFound:
             return None
         result = getattr(scan, "data_discovery_result", None) or getattr(
