@@ -234,13 +234,6 @@ SOURCES: list[GithubSource] = [
     ),
 ]
 
-# schema.org automotive subset – fetched directly from schema.org JSON-LD release
-SCHEMA_ORG_AUTOMOTIVE_TYPES = [
-    "Vehicle", "Car", "BusOrCoach", "Motorcycle", "MotorizedBicycle",
-    "BicycleStore", "AutoWash", "AutoDealer", "AutoPartsStore",
-    "AutoRepair", "AutoRental",
-]
-
 # ─────────────────────────────────────────────────────────────── GitHub helpers
 
 class GitHubFetcher:
@@ -471,42 +464,12 @@ def pick_processor(source: GithubSource, path: str) -> Callable:
     }.get(ext, process_auto)
 
 
-# ─────────────────────────────────────────────────── schema.org automotive fetch
-
-def fetch_schema_org_automotive() -> list[Doc]:
-    """Fetch schema.org JSON-LD for the automotive type subset."""
-    docs: list[Doc] = []
-    session = requests.Session()
-    for stype in SCHEMA_ORG_AUTOMOTIVE_TYPES:
-        url = f"https://schema.org/{stype}.jsonld"
-        try:
-            resp = session.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            name = data.get("rdfs:label", stype)
-            comment = data.get("rdfs:comment", "")
-            props: list[str] = []
-            for item in data.get("@graph", []):
-                if item.get("@type") in ("rdf:Property", "rdfs:Property"):
-                    prop_name = item.get("rdfs:label", "")
-                    prop_comment = item.get("rdfs:comment", "")
-                    if prop_name:
-                        props.append(f"  - **{prop_name}**: {prop_comment}")
-            text = f"## schema.org: {name}\n{comment}"
-            if props:
-                text += "\n### Properties\n" + "\n".join(props)
-            docs.append(
-                Doc(
-                    domain="automotive",
-                    source="schema.org automotive",
-                    path=f"schema.org/{stype}",
-                    text=text,
-                )
-            )
-            _rate_sleep(0.5)
-        except Exception as exc:
-            logger.warning("schema.org fetch failed for %s: %s", stype, exc)
-    return docs
+# ─────────────────────────────────────────────────── (schema.org fetch removed)
+# The automotive schema.org per-type JSON-LD endpoints (e.g.
+# https://schema.org/Vehicle.jsonld) returned 404 consistently and were
+# silently adding noise to the log without contributing chunks. The
+# automotive seed_doc covers every type that subset used to target. Dead
+# code excised on purpose — leave it dead.
 
 
 # ─────────────────────────────────────────────────────────────── GCS upload
@@ -690,14 +653,13 @@ def collect_docs_for_domain(
     domain: str,
     repo_root: Path,
     fetcher: Optional[GitHubFetcher],
-    include_schema_org: bool,
     dry_run: bool,
 ) -> list[Doc]:
     """Collect all Docs for a single domain.
 
     Ordering: seed_docs first (primary), then optional GitHub augmentation
-    (best-effort; logs but never raises on failure), then schema.org for
-    automotive. Returns whatever was successfully extracted.
+    (best-effort; logs but never raises on failure). Returns whatever was
+    successfully extracted.
     """
     docs: list[Doc] = []
 
@@ -736,15 +698,6 @@ def collect_docs_for_domain(
             else:
                 logger.info("  → %d chunks from github", count)
 
-    # 3. schema.org automotive fetch — only for automotive domain
-    if include_schema_org and domain == "automotive" and not dry_run:
-        try:
-            schema_docs = fetch_schema_org_automotive()
-            docs.extend(schema_docs)
-            logger.info("[automotive] schema.org → %d chunks", len(schema_docs))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("schema.org fetch failed: %s (continuing)", exc)
-
     return docs
 
 
@@ -776,7 +729,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Limit to specific domains (default: all)",
     )
     p.add_argument("--github-token", help="GitHub PAT to increase rate limits (or GITHUB_TOKEN)")
-    p.add_argument("--no-schema-org", action="store_true", help="Skip schema.org fetch")
     p.add_argument("--dry-run", action="store_true", help="Print sources; do not fetch or upload")
     p.add_argument("--save-local", metavar="DIR", help="Also save docs as .txt files locally")
     p.add_argument("--skip-upload", action="store_true", help="Fetch + process but skip GCS/RAG")
@@ -820,7 +772,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             domain=domain,
             repo_root=repo_root,
             fetcher=fetcher,
-            include_schema_org=not args.no_schema_org,
             dry_run=args.dry_run,
         )
 
