@@ -48,8 +48,8 @@ class VertexRagClient:
             retrieval = rag.Retrieval(
                 source=rag.VertexRagStore(
                     rag_resources=[rag.RagResource(rag_corpus=self.rag_corpus)],
-                    similarity_top_k=10,
-                    vector_distance_threshold=0.5,
+                    similarity_top_k=30,
+                    vector_distance_threshold=0.7,
                 ),
             )
             tools.append(Tool.from_retrieval(retrieval=retrieval))
