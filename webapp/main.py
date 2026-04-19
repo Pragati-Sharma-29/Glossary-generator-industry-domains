@@ -169,7 +169,7 @@ async def suggest(
         return templates.TemplateResponse(
             request,
             "error.html",
-            {"error": str(exc)},
+            {"error": f"{type(exc).__name__}: {exc}"},
             status_code=500,
         )
 
@@ -194,7 +194,7 @@ async def suggest(
         return templates.TemplateResponse(
             request,
             "error.html",
-            {"error": str(exc)},
+            {"error": f"{type(exc).__name__}: {exc}"},
             status_code=500,
         )
 
