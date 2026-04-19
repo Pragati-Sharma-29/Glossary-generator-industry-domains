@@ -7,9 +7,10 @@
   down which tables the agent should annotate.</p>
 
   <p class="meta">
-    Grounding: Vertex AI RAG corpus
-    <code>{{ rag_corpus_display_name }}</code>
-    (resolved automatically from your project).
+    Grounding: per-domain Vertex AI RAG corpora
+    (display name prefix <code>{{ rag_corpus_prefix }}</code>). The agent
+    queries only the corpus for the industry you pick below, so healthcare
+    content can't bleed into retail suggestions.
   </p>
   <p class="meta">
     <strong>Recommended:</strong> run a Dataplex <code>DATA_PROFILE</code>
@@ -30,6 +31,16 @@
       </button>
     </div>
     <p id="datasets-status" class="status"></p>
+
+    <label>
+      Industry
+      <select name="domain" required>
+        <option value="">— pick an industry —</option>
+        {% for value, label in domain_choices %}
+          <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
 
     <label id="dataset-wrap" hidden>
       BigQuery dataset

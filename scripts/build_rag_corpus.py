@@ -637,51 +637,115 @@ def import_from_gcs(corpus_name: str, gcs_prefix_uri: str) -> None:
     )
 
 
+# ─────────────────────────────────────────────────────────────── seed_docs
+
+ALL_DOMAINS = [
+    "retail_ecommerce",
+    "finance_banking",
+    "healthcare",
+    "erp_supply_chain",
+    "crm_marketing",
+    "telco",
+    "automotive",
+]
+
+
+def load_seed_docs(domain: str, repo_root: Path) -> list[Doc]:
+    """Split ``seed_docs/<domain>.md`` on ``## `` headers into one Doc per term.
+
+    Seed docs are hand-curated term definitions — always available, always
+    high signal, and immune to upstream repo churn.
+    """
+    path = repo_root / "seed_docs" / f"{domain}.md"
+    if not path.exists():
+        logger.warning("No seed_docs/%s.md — skipping seed for %s", domain, domain)
+        return []
+    text = path.read_text(encoding="utf-8")
+
+    # Split on lines that start with "## " (but keep the header line).
+    sections = re.split(r"\n(?=## )", text)
+    docs: list[Doc] = []
+    for section in sections:
+        if not section.startswith("## "):
+            continue  # drop the intro / title block before the first H2
+        header, _, body = section.partition("\n")
+        term = header.removeprefix("## ").strip()
+        chunk = f"{header}\n{body.strip()}"
+        if len(chunk) < 40:
+            continue
+        docs.append(
+            Doc(
+                domain=domain,
+                source=f"seed_docs/{domain}.md",
+                path=f"seed_docs/{domain}.md#{term}",
+                text=chunk,
+            )
+        )
+    return docs
+
+
 # ─────────────────────────────────────────────────────────────── main
 
-def collect_docs(
-    domains: Optional[list[str]],
-    github_token: Optional[str],
+def collect_docs_for_domain(
+    domain: str,
+    repo_root: Path,
+    fetcher: Optional[GitHubFetcher],
     include_schema_org: bool,
     dry_run: bool,
 ) -> list[Doc]:
-    fetcher = GitHubFetcher(token=github_token)
-    active_sources = [
-        s for s in SOURCES if domains is None or s.domain in domains
-    ]
-    logger.info("Fetching from %d sources", len(active_sources))
-    all_docs: list[Doc] = []
+    """Collect all Docs for a single domain.
 
-    for src in active_sources:
-        logger.info("[%s] %s / %s", src.domain, src.repo, src.ref)
-        if dry_run:
-            print(f"  DRY-RUN: would fetch {src.repo} ({src.description})")
-            continue
-        count = 0
-        for path, content in fetcher.iter_matching(src):
-            processor = pick_processor(src, path)
-            docs = processor(path, content, src)
-            all_docs.extend(docs)
-            count += len(docs)
-        if count == 0:
-            logger.warning(
-                "  ⚠  %s yielded 0 chunks — repo missing, ref renamed, or "
-                "path_patterns stale? Check https://github.com/%s",
-                src.repo, src.repo,
-            )
-        else:
-            logger.info("  → %d chunks extracted", count)
+    Ordering: seed_docs first (primary), then optional GitHub augmentation
+    (best-effort; logs but never raises on failure), then schema.org for
+    automotive. Returns whatever was successfully extracted.
+    """
+    docs: list[Doc] = []
 
-    if include_schema_org and (domains is None or "automotive" in domains):
-        logger.info("Fetching schema.org automotive types")
-        if not dry_run:
+    # 1. Seed docs — primary grounding, always runs
+    seed = load_seed_docs(domain, repo_root)
+    if dry_run:
+        print(f"  DRY-RUN [{domain}]: {len(seed)} seed_doc chunks")
+    else:
+        docs.extend(seed)
+        logger.info("[%s] seed_docs → %d chunks", domain, len(seed))
+
+    # 2. GitHub augmentation — only if token present
+    if fetcher is not None:
+        for src in [s for s in SOURCES if s.domain == domain]:
+            logger.info("[%s] github %s / %s", domain, src.repo, src.ref)
+            if dry_run:
+                print(f"  DRY-RUN [{domain}]: would fetch {src.repo}")
+                continue
+            count = 0
+            try:
+                for path, content in fetcher.iter_matching(src):
+                    processor = pick_processor(src, path)
+                    chunks = processor(path, content, src)
+                    docs.extend(chunks)
+                    count += len(chunks)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "  github fetch failed for %s: %s (continuing)",
+                    src.repo, exc,
+                )
+            if count == 0:
+                logger.warning(
+                    "  ⚠ %s yielded 0 chunks (repo/path/ref drift?)",
+                    src.repo,
+                )
+            else:
+                logger.info("  → %d chunks from github", count)
+
+    # 3. schema.org automotive fetch — only for automotive domain
+    if include_schema_org and domain == "automotive" and not dry_run:
+        try:
             schema_docs = fetch_schema_org_automotive()
-            all_docs.extend(schema_docs)
-            logger.info("  → %d schema.org chunks", len(schema_docs))
-        else:
-            print("  DRY-RUN: would fetch schema.org automotive types")
+            docs.extend(schema_docs)
+            logger.info("[automotive] schema.org → %d chunks", len(schema_docs))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("schema.org fetch failed: %s (continuing)", exc)
 
-    return all_docs
+    return docs
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -734,62 +798,100 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("ERROR: --project / GOOGLE_CLOUD_PROJECT is required", file=sys.stderr)
         return 2
 
-    # ── 1. Collect and process docs ──────────────────────────────────────────
-    docs = collect_docs(
-        domains=args.domains,
-        github_token=github_token,
-        include_schema_org=not args.no_schema_org,
-        dry_run=args.dry_run,
-    )
+    repo_root = Path(__file__).resolve().parent.parent
+    target_domains = args.domains or ALL_DOMAINS
+
+    # GitHub fetcher is opt-in via GITHUB_TOKEN to avoid the 60-req/hr
+    # anonymous ceiling that was silently corrupting earlier builds.
+    if github_token:
+        fetcher: Optional[GitHubFetcher] = GitHubFetcher(token=github_token)
+        logger.info("GitHub augmentation enabled (token present — 5000 req/hr)")
+    else:
+        fetcher = None
+        logger.info(
+            "GitHub augmentation disabled (no GITHUB_TOKEN). Using seed_docs/ only."
+        )
+
+    results: dict[str, tuple[Optional[str], int]] = {}
+
+    for domain in target_domains:
+        print(f"\n=== {domain} ===")
+        docs = collect_docs_for_domain(
+            domain=domain,
+            repo_root=repo_root,
+            fetcher=fetcher,
+            include_schema_org=not args.no_schema_org,
+            dry_run=args.dry_run,
+        )
+
+        if args.dry_run:
+            print(f"  DRY-RUN: {len(docs)} chunks would be indexed for {domain}")
+            continue
+
+        print(f"  Collected {len(docs)} chunks")
+
+        if args.save_local:
+            local_dir = Path(args.save_local) / domain
+            local_dir.mkdir(parents=True, exist_ok=True)
+            for i, doc in enumerate(docs):
+                out = local_dir / f"{i:06d}.txt"
+                out.write_text(
+                    f"Source: {doc.source}\nDomain: {doc.domain}\n"
+                    f"Path: {doc.path}\n---\n{doc.text}",
+                    encoding="utf-8",
+                )
+            print(f"  Saved {len(docs)} files to {local_dir}")
+
+        if args.skip_upload:
+            results[domain] = (None, len(docs))
+            continue
+
+        if not docs:
+            logger.warning("No docs for %s — skipping corpus create", domain)
+            results[domain] = (None, 0)
+            continue
+
+        if not args.gcs_bucket:
+            print("ERROR: --gcs-bucket is required to upload", file=sys.stderr)
+            return 2
+
+        prefix = f"{args.gcs_prefix}/{domain}"
+        print(f"  Uploading to gs://{args.gcs_bucket}/{prefix}/ …")
+        upload_docs_to_gcs(
+            docs,
+            bucket_name=args.gcs_bucket,
+            prefix=prefix,
+            project_id=project_id,
+        )
+
+        corpus_display = f"{args.corpus_display_name}-{domain}"
+        print(f"  Creating / updating corpus '{corpus_display}' …")
+        corpus_name = create_or_get_corpus(project_id, args.location, corpus_display)
+        gcs_uri = f"gs://{args.gcs_bucket}/{prefix}/"
+        import_from_gcs(corpus_name, gcs_uri)
+        results[domain] = (corpus_name, len(docs))
 
     if args.dry_run:
-        print(f"\n{len(SOURCES)} sources would be processed.")
         return 0
 
-    print(f"Collected {len(docs)} document chunks across all domains.")
+    # ── Summary ──────────────────────────────────────────────────────────────
+    print("\n✓ Done. Per-domain corpora:")
+    for domain in target_domains:
+        if domain not in results:
+            continue
+        name, count = results[domain]
+        shown = name or "(skip-upload)"
+        print(f"  {domain:20s}  {count:4d} chunks  {shown}")
 
-    if not docs:
-        print("No documents collected – check source connectivity.", file=sys.stderr)
-        return 1
-
-    # ── 2. Optionally save locally ───────────────────────────────────────────
-    if args.save_local:
-        local_dir = Path(args.save_local)
-        local_dir.mkdir(parents=True, exist_ok=True)
-        for i, doc in enumerate(docs):
-            out = local_dir / f"{doc.domain}_{i:06d}.txt"
-            out.write_text(
-                f"Source: {doc.source}\nDomain: {doc.domain}\nPath: {doc.path}\n---\n{doc.text}",
-                encoding="utf-8",
-            )
-        print(f"Saved {len(docs)} files to {args.save_local}")
-
-    if args.skip_upload:
-        return 0
-
-    # ── 3. Upload to GCS ─────────────────────────────────────────────────────
-    if not args.gcs_bucket:
-        print("ERROR: --gcs-bucket is required to upload", file=sys.stderr)
-        return 2
-
-    print(f"Uploading to gs://{args.gcs_bucket}/{args.gcs_prefix} …")
-    upload_docs_to_gcs(
-        docs,
-        bucket_name=args.gcs_bucket,
-        prefix=args.gcs_prefix,
-        project_id=project_id,
-    )
-
-    # ── 4. Create / update RAG corpus ────────────────────────────────────────
-    print(f"Creating / updating Vertex RAG corpus '{args.corpus_display_name}' …")
-    corpus_name = create_or_get_corpus(project_id, args.location, args.corpus_display_name)
-    gcs_uri = f"gs://{args.gcs_bucket}/{args.gcs_prefix}/"
-    import_from_gcs(corpus_name, gcs_uri)
-
-    print("\n✓ Done.")
-    print(f"  Corpus resource name: {corpus_name}")
-    print(f"\nSet this in your environment:")
-    print(f"  export VERTEX_RAG_CORPUS={corpus_name}")
+    any_built = any(n for n, _ in results.values())
+    if any_built:
+        print(
+            "\nThe web app resolves domain corpora automatically by display "
+            f"name prefix '{args.corpus_display_name}'. You can also set:"
+        )
+        print(
+            f"  export VERTEX_RAG_CORPUS_PREFIX={args.corpus_display_name}"
+        )
     return 0
 
 

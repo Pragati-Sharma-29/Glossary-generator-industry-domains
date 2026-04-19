@@ -40,9 +40,18 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 
-RAG_CORPUS_DISPLAY_NAME = os.environ.get(
-    "VERTEX_RAG_CORPUS_DISPLAY_NAME", "industry-glossaries"
-)
+RAG_CORPUS_PREFIX = os.environ.get("VERTEX_RAG_CORPUS_PREFIX", "industry-glossaries")
+
+DOMAIN_CHOICES = [
+    ("retail_ecommerce", "Retail / E-commerce"),
+    ("finance_banking", "Finance / Banking"),
+    ("healthcare", "Healthcare"),
+    ("erp_supply_chain", "ERP / Supply Chain"),
+    ("crm_marketing", "CRM / Marketing"),
+    ("telco", "Telco"),
+    ("automotive", "Automotive"),
+]
+DOMAIN_LABELS = dict(DOMAIN_CHOICES)
 
 app = FastAPI(title="Glossary Generator")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -54,28 +63,29 @@ _SESSIONS: dict[str, dict] = {}
 
 # ── RAG corpus resolver ─────────────────────────────────────────────────────
 
-@lru_cache(maxsize=16)
-def _resolve_rag_corpus(project_id: str, location: str) -> str:
-    """Look up the built-in RAG corpus resource name by display name.
+@lru_cache(maxsize=64)
+def _resolve_domain_corpus(project_id: str, location: str, domain: str) -> str:
+    """Resolve the RAG corpus for a single industry domain.
 
-    Cached per (project, location) so we pay the list_corpora cost once per
-    process. Raises ``RuntimeError`` with a clear pointer to the build script
-    if the corpus is missing.
+    Looks up a corpus with display name ``{RAG_CORPUS_PREFIX}-{domain}``
+    (the convention produced by ``scripts/build_rag_corpus.py``). Cached
+    per (project, location, domain). Raises ``RuntimeError`` if the
+    per-domain corpus isn't found.
     """
     import vertexai
     from vertexai.preview import rag
 
+    display_name = f"{RAG_CORPUS_PREFIX}-{domain}"
     vertexai.init(project=project_id, location=location)
     for corpus in rag.list_corpora():
-        if corpus.display_name == RAG_CORPUS_DISPLAY_NAME:
-            logger.info("Resolved RAG corpus '%s' → %s",
-                        RAG_CORPUS_DISPLAY_NAME, corpus.name)
+        if corpus.display_name == display_name:
+            logger.info("Resolved RAG corpus '%s' → %s", display_name, corpus.name)
             return corpus.name
     raise RuntimeError(
-        f"RAG corpus with display_name='{RAG_CORPUS_DISPLAY_NAME}' not found "
-        f"in project {project_id} / {location}. "
-        "Run `python scripts/build_rag_corpus.py --project {project_id} "
-        "--gcs-bucket ...` to create it."
+        f"RAG corpus with display_name='{display_name}' not found in "
+        f"{project_id}/{location}. Build it with:\n"
+        f"  python scripts/build_rag_corpus.py --project {project_id} "
+        f"--location {location} --domains {domain} --gcs-bucket <your-bucket>"
     )
 
 
@@ -140,7 +150,8 @@ def index(request: Request) -> HTMLResponse:
             "default_project": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
             "default_glossary": os.environ.get("DATAPLEX_GLOSSARY_ID", ""),
             "default_location": os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
-            "rag_corpus_display_name": RAG_CORPUS_DISPLAY_NAME,
+            "rag_corpus_prefix": RAG_CORPUS_PREFIX,
+            "domain_choices": DOMAIN_CHOICES,
         },
     )
 
@@ -151,6 +162,7 @@ async def suggest(
     response: Response,
     project_id: str = Form(...),
     dataset_id: str = Form(...),
+    domain: str = Form(...),
     instructions: str = Form(""),
     location: str = Form("us-central1"),
     glossary_id: str = Form(""),
@@ -162,8 +174,16 @@ async def suggest(
     form = await request.form()
     table_allowlist = [v for v in form.getlist("tables") if v]
 
+    if domain not in DOMAIN_LABELS:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"error": f"Unknown industry domain: {domain!r}"},
+            status_code=400,
+        )
+
     try:
-        rag_corpus = _resolve_rag_corpus(project_id, location)
+        rag_corpus = _resolve_domain_corpus(project_id, location, domain)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Could not resolve RAG corpus")
         return templates.TemplateResponse(
@@ -172,6 +192,15 @@ async def suggest(
             {"error": f"{type(exc).__name__}: {exc}"},
             status_code=500,
         )
+
+    # Fold the picked industry into the instructions so the model knows to
+    # bias mapping vocabulary toward it (the RAG corpus is already scoped).
+    industry_hint = f"Industry hint: {DOMAIN_LABELS[domain]}."
+    instructions_combined = (
+        f"{industry_hint}\n{instructions}".strip()
+        if instructions.strip()
+        else industry_hint
+    )
 
     config = AgentConfig.from_env(
         project_id=project_id,
@@ -185,7 +214,7 @@ async def suggest(
         agent = GlossaryGeneratorAgent(config)
         result = agent.run(
             dataset_id,
-            instructions=instructions,
+            instructions=instructions_combined,
             table_allowlist=table_allowlist or None,
             publish=False,
         )
