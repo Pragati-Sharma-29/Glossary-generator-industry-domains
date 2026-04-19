@@ -61,12 +61,57 @@
 
 <section class="card">
   <h3>Proposed terms ({{ suggestion.terms | length }})</h3>
+  <p class="meta">
+    Synonyms and related terms are listed under each term. Tick the boxes
+    to promote any of them into their own glossary term on publish
+    (defaults off — by default they stay folded into the parent term's
+    description).
+  </p>
   <ul class="terms">
     {% for t in suggestion.terms %}
       <li>
         <strong>{{ t.display_name }}</strong>
-        {% if t.synonyms %}<span class="chip">syn: {{ t.synonyms | join(", ") }}</span>{% endif %}
         <p>{{ t.definition }}</p>
+
+        {% if t.synonyms %}
+          <details class="derived-terms" open>
+            <summary>{{ t.synonyms | length }} synonym(s)</summary>
+            <ul class="derived-list">
+              {% for syn in t.synonyms %}
+                <li>
+                  <label>
+                    <input type="checkbox"
+                           form="publish-form"
+                           name="promote_synonym"
+                           value="{{ syn }}|{{ t.display_name }}">
+                    Create <code>{{ syn }}</code> as its own term
+                    (synonym&nbsp;of&nbsp;<em>{{ t.display_name }}</em>)
+                  </label>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+
+        {% if t.related_terms %}
+          <details class="derived-terms">
+            <summary>{{ t.related_terms | length }} related term(s)</summary>
+            <ul class="derived-list">
+              {% for rel in t.related_terms %}
+                <li>
+                  <label>
+                    <input type="checkbox"
+                           form="publish-form"
+                           name="promote_related"
+                           value="{{ rel }}|{{ t.display_name }}">
+                    Create <code>{{ rel }}</code> as its own term
+                    (related&nbsp;to&nbsp;<em>{{ t.display_name }}</em>)
+                  </label>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
       </li>
     {% endfor %}
   </ul>
@@ -114,7 +159,9 @@
   <section class="card actions">
     {% if glossary_id %}
       <p>Approved mappings will be published as entry links in Dataplex
-         glossary <code>{{ glossary_id }}</code>.</p>
+         glossary <code>{{ glossary_id }}</code>.
+         Any ticked synonyms / related terms will also be created as
+         standalone glossary terms.</p>
       <button type="submit" class="primary">Publish approved mappings</button>
     {% else %}
       <p class="warning">No glossary id set — go back and fill it in to publish.</p>

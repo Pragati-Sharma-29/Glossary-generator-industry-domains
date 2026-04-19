@@ -340,6 +340,8 @@ async def publish(
 
     form = await request.form()
     approved_ids = set(form.getlist("approved_mapping"))
+    promoted_synonyms = form.getlist("promote_synonym")
+    promoted_related = form.getlist("promote_related")
 
     session = _SESSIONS[session_id]
     suggestion_dict = session["suggestion"]
@@ -361,6 +363,22 @@ async def publish(
         for t in suggestion_dict["terms"]
         if t["display_name"] in needed_term_names
     ]
+
+    # Promoted synonyms / related terms become their own standalone
+    # GlossaryTerms. Dedupe against names we're already publishing so the
+    # API doesn't 409-loop if the user ticks the same name twice or ticks
+    # something that's already a top-level term.
+    existing_names = {t.display_name.lower() for t in approved_terms}
+    extra_terms = list(
+        _build_promoted_terms(
+            promoted_synonyms, kind="synonym", existing=existing_names
+        )
+    ) + list(
+        _build_promoted_terms(
+            promoted_related, kind="related", existing=existing_names
+        )
+    )
+    approved_terms.extend(extra_terms)
 
     filtered = GlossarySuggestion(
         industry=suggestion_dict.get("industry", ""),
@@ -416,3 +434,39 @@ def _term_from_dict(d: dict) -> TermSuggestion:
         synonyms=d.get("synonyms", []),
         related_terms=d.get("related_terms", []),
     )
+
+
+def _build_promoted_terms(
+    values: list[str],
+    *,
+    kind: str,
+    existing: set[str],
+):
+    """Yield TermSuggestions for user-ticked synonyms or related terms.
+
+    Form values are formatted as ``"<derived_name>|<parent_display_name>"``
+    (see suggestions.html). Each unique derived name is emitted once —
+    even if ticked under multiple parents, we still only create one term
+    and merge parent refs into its description. ``kind`` is either
+    ``"synonym"`` or ``"related"`` and controls the description prefix.
+    """
+    seen: dict[str, list[str]] = {}
+    for raw in values:
+        if "|" not in raw:
+            continue
+        name, parent = raw.split("|", 1)
+        name, parent = name.strip(), parent.strip()
+        if not name or name.lower() in existing:
+            continue
+        seen.setdefault(name, []).append(parent)
+
+    prefix = "Synonym of" if kind == "synonym" else "Related to"
+    for name, parents in seen.items():
+        parent_ref = ", ".join(dict.fromkeys(parents))
+        yield TermSuggestion(
+            display_name=name,
+            definition=f"{prefix} {parent_ref}.",
+            synonyms=[],
+            related_terms=list(dict.fromkeys(parents)),
+        )
+        existing.add(name.lower())  # block duplicate emission across calls
