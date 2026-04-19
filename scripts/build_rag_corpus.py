@@ -2,8 +2,9 @@
 
 Sources per domain
 ──────────────────
-Retail / Ecommerce   : google/retail-data-model · dbt-labs/jaffle_shop
-                       · GoogleCloudPlatform/thelook-ecommerce
+Retail / Ecommerce   : googleapis/googleapis (Cloud Retail API protos)
+                       · dbt-labs/jaffle_shop · gs1/EPCIS
+                       · commercetools/commercetools-api-reference
 Finance / Banking    : edmcouncil/fibo · finos/common-domain-model
                        · GoogleCloudPlatform/cortex-data-foundation (SAP Finance)
 Healthcare           : OHDSI/CommonDataModel (OMOP) · HL7/fhir (FHIR R4)
@@ -73,11 +74,11 @@ SOURCES: list[GithubSource] = [
     # ── Retail / Ecommerce ──────────────────────────────────────────────────────
     GithubSource(
         domain="retail_ecommerce",
-        repo="google/retail-data-model",
-        ref="main",
-        path_patterns=["**.proto", "**.md"],
+        repo="googleapis/googleapis",
+        ref="master",
+        path_patterns=["google/cloud/retail/v2/**.proto"],
         processor="auto",
-        description="Google Retail Data Model – protobuf entity definitions",
+        description="Google Cloud Retail API – Product, UserEvent, PurchaseTransaction protos",
     ),
     GithubSource(
         domain="retail_ecommerce",
@@ -89,11 +90,24 @@ SOURCES: list[GithubSource] = [
     ),
     GithubSource(
         domain="retail_ecommerce",
-        repo="GoogleCloudPlatform/thelook-ecommerce",
+        repo="commercetools/commercetools-api-reference",
         ref="main",
-        path_patterns=["**.md", "**.sql"],
+        path_patterns=[
+            "api-specs/api/types/cart/**.raml",
+            "api-specs/api/types/order/**.raml",
+            "api-specs/api/types/product/**.raml",
+            "api-specs/api/types/customer/**.raml",
+        ],
         processor="auto",
-        description="TheLook Ecommerce – sample schema documentation",
+        description="commercetools API – Cart/Order/Product/Customer type references",
+    ),
+    GithubSource(
+        domain="retail_ecommerce",
+        repo="gs1/EPCIS",
+        ref="master",
+        path_patterns=["**.md", "REST Bindings/**.json"],
+        processor="auto",
+        description="GS1 EPCIS – supply chain / product event vocabulary",
     ),
 
     # ── Finance / Banking ───────────────────────────────────────────────────────
@@ -649,7 +663,14 @@ def collect_docs(
             docs = processor(path, content, src)
             all_docs.extend(docs)
             count += len(docs)
-        logger.info("  → %d chunks extracted", count)
+        if count == 0:
+            logger.warning(
+                "  ⚠  %s yielded 0 chunks — repo missing, ref renamed, or "
+                "path_patterns stale? Check https://github.com/%s",
+                src.repo, src.repo,
+            )
+        else:
+            logger.info("  → %d chunks extracted", count)
 
     if include_schema_org and (domains is None or "automotive" in domains):
         logger.info("Fetching schema.org automotive types")
