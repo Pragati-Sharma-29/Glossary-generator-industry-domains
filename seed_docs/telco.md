@@ -353,3 +353,103 @@ latency, packet loss). Breach records drive credits or penalties.
 
 - **Typical columns:** `sla_id`, `target_value`, `measured_value`,
   `breach_flag`, `sla_credit_amount`
+
+---
+
+# Telco Metrics & KPIs
+
+Standard TM Forum eTOM, 3GPP TS 32-series, and operator commercial
+measures. Surface as ``related_terms`` on Subscriber, Service, CDR,
+Network Element, and KPI entities.
+
+## ARPU (Average Revenue Per User)
+
+`Total service revenue / active Subscribers` per period. Primary
+commercial metric.
+
+- **Related entities:** Subscriber, Service
+- **Typical columns:** `arpu`
+
+## Churn Rate
+
+`Terminated Subscribers / starting Subscribers` per month. Voluntary
+vs involuntary breakdowns common.
+
+- **Related entities:** Subscriber
+- **Typical columns:** `churn_rate`, `monthly_churn`
+
+## Customer Lifetime Value (CLV)
+
+Forecasted revenue less cost to serve across a Subscriber's tenure.
+
+- **Related entities:** Subscriber
+- **Typical columns:** `clv`, `ltv`
+
+## MOU / MBU (Minutes / Megabytes of Usage)
+
+Per-Subscriber voice minutes and data usage.
+
+- **Related entities:** Subscriber, CDR
+- **Typical columns:** `mou`, `mbu`, `minutes_of_usage`, `data_mb`
+
+## RAN Accessibility (Call Setup Success Rate)
+
+`Successful RRC + S1/NG setups / attempts`. Primary 3GPP radio
+accessibility KPI.
+
+- **Related entities:** Cell, KPI
+- **Typical columns:** `accessibility`, `rrc_setup_success`,
+  `call_setup_success_rate`
+
+## RAN Retainability (Drop Rate)
+
+Abnormal release rate for active calls / sessions. Inverse of
+retainability.
+
+- **Related entities:** Cell, CDR
+- **Typical columns:** `drop_rate`, `retainability`,
+  `call_drop_rate`
+
+## Handover Success Rate
+
+`Successful handovers / handover attempts`. Mobility quality.
+
+- **Related entities:** Handover, Cell
+- **Typical columns:** `ho_success_rate`, `handover_sr`
+
+## Network Availability
+
+`Uptime / total time` for a Network Element or service — often tied to
+SLA obligations.
+
+- **Related entities:** Network Element, SLA Compliance
+- **Typical columns:** `availability`, `uptime_pct`
+
+## First Call Resolution (FCR)
+
+Share of support Cases resolved without follow-up. Customer-care KPI.
+
+- **Related entities:** Service Outage, Trouble Ticket
+- **Typical columns:** `fcr`, `first_call_resolution`
+
+## NPS (Net Promoter Score)
+
+Customer-experience survey metric.
+
+- **Related entities:** Subscriber
+- **Typical columns:** `nps`
+
+## Active Users (DAU / MAU)
+
+Daily / monthly active Subscribers on a data Service.
+
+- **Related entities:** Subscriber, Service
+- **Typical columns:** `dau`, `mau`, `active_users`
+
+## Bad Debt / Collection Rate
+
+Share of Bills uncollected past a due-date window. Revenue-assurance
+metric.
+
+- **Related entities:** Bill, Subscriber
+- **Typical columns:** `bad_debt`, `collection_rate`

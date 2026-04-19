@@ -199,3 +199,108 @@ commonly captured (NHTSA FARS schema).
 
 - **Typical columns:** `incident_id`, `crash_id`, `severity`,
   `fatal_flag`, `injury_count`
+
+---
+
+# Automotive Metrics & KPIs
+
+Dealer operations (NADA/JD-Power), OEM aftersales, and fleet/telematics
+measures. Surface as ``related_terms`` on Vehicle, Sale, Repair Order,
+Dealer entities.
+
+## Sales Volume / Units Sold
+
+Count of Sales in a period, often segmented by new vs used and by
+model.
+
+- **Related entities:** Sale, Vehicle
+- **Typical columns:** `units_sold`, `sales_volume`
+
+## Gross Margin per Vehicle
+
+Sale price minus invoice cost, averaged per vehicle. Front-end gross
+vs back-end gross (financing/warranty/add-ons).
+
+- **Related entities:** Sale
+- **Typical columns:** `front_gross`, `back_gross`,
+  `gross_per_vehicle`
+
+## Days to Close
+
+Days from Inventory Vehicle listing to Sale. Measures lot velocity.
+
+- **Related entities:** Inventory Vehicle, Sale
+- **Typical columns:** `days_to_close`, `days_on_lot`
+
+## Days Supply
+
+`Inventory units / average daily sales`. Dealer stocking adequacy.
+
+- **Related entities:** Inventory Vehicle
+- **Typical columns:** `days_supply`
+
+## Customer Satisfaction Index (CSI)
+
+OEM-defined survey score on sales or service experience. Drives dealer
+incentives.
+
+- **Related entities:** Customer, Sale, Repair Order
+- **Typical columns:** `csi`, `sales_csi`, `service_csi`
+
+## Fixed First Visit (FFV)
+
+Share of Repair Orders that resolved the concern without a return visit.
+
+- **Related entities:** Repair Order
+- **Typical columns:** `ffv_rate`, `fixed_first_visit`
+
+## Service Retention Rate
+
+Share of sold Customers who return for service over a period.
+
+- **Related entities:** Customer, Repair Order
+- **Typical columns:** `service_retention`
+
+## Warranty Claim Rate / Warranty Cost per Vehicle
+
+Claims per 1,000 vehicles in service; OEM quality + cost measure.
+
+- **Related entities:** Warranty, Recall, Vehicle
+- **Typical columns:** `warranty_claims_per_1000`,
+  `warranty_cost_per_vehicle`
+
+## Repair Orders per Technician / RO Hours
+
+Productivity measures in fixed operations.
+
+- **Related entities:** Repair Order, Service Line
+- **Typical columns:** `ro_per_tech`, `flat_rate_hours`, `billed_hours`
+
+## Floor Plan Expense
+
+Interest cost on the dealer's inventory financing. Grows with aging
+inventory.
+
+- **Related entities:** Inventory Vehicle
+- **Typical columns:** `floor_plan_expense`
+
+## Fleet Utilization / Vehicle Availability
+
+Time in service over total fleet time (for fleet and rental).
+
+- **Related entities:** Vehicle, Driver
+- **Typical columns:** `utilization`, `availability`
+
+## Average Fuel Economy (Fleet)
+
+Aggregate mpg or l/100km over a fleet and period. Telematics-derived.
+
+- **Related entities:** Telematics Event, Vehicle
+- **Typical columns:** `avg_mpg`, `fleet_mpg`
+
+## Crash Rate / Fatality Rate
+
+Per 100 million VMT (vehicle miles traveled). NHTSA safety metric.
+
+- **Related entities:** Collision, Vehicle
+- **Typical columns:** `crash_rate`, `fatality_rate_per_mvmt`

@@ -238,3 +238,115 @@ A request for benefit under an insurance Policy after a covered loss
 event.
 
 - **Typical columns:** `claim_id`, `claim_number`, `loss_event_id`
+
+---
+
+# Finance / Banking Metrics & KPIs
+
+Standard regulatory and performance measures. Surfaced as
+``related_terms`` on the underlying entities.
+
+## Net Interest Margin (NIM)
+
+`(Interest income − interest expense) / average earning assets`. Core
+profitability metric for banks.
+
+- **Related entities:** Account, Loan, Deposit
+- **Typical columns:** `nim`, `net_interest_margin`
+
+## Return on Assets (ROA) / Return on Equity (ROE)
+
+Net income over average assets (ROA) or equity (ROE). Bank-wide
+profitability.
+
+- **Related entities:** Account, Institution
+- **Typical columns:** `roa`, `roe`
+
+## Non-Performing Loan Ratio (NPL)
+
+`NPLs / total loans`. NPL defined by days-past-due threshold (commonly
+90).
+
+- **Related entities:** Loan
+- **Typical columns:** `npl_ratio`, `non_performing_ratio`
+
+## Loan-to-Deposit Ratio (LDR)
+
+`Loans / deposits`. Liquidity and lending-intensity metric.
+
+- **Related entities:** Loan, Account
+- **Typical columns:** `ldr`, `loan_to_deposit`
+
+## CET1 Capital Ratio
+
+Common Equity Tier 1 capital divided by risk-weighted assets. Basel III
+core regulatory metric.
+
+- **Related entities:** Account, Institution
+- **Typical columns:** `cet1_ratio`, `tier1_ratio`
+
+## Liquidity Coverage Ratio (LCR)
+
+Basel III 30-day stress liquidity metric: `HQLA / net outflows`.
+
+- **Related entities:** Account
+- **Typical columns:** `lcr`
+
+## Cost-to-Income Ratio
+
+`Operating expenses / operating income`. Bank operational efficiency.
+
+- **Related entities:** Account
+- **Typical columns:** `cost_to_income`, `efficiency_ratio`
+
+## Loss Given Default (LGD) / Probability of Default (PD)
+
+Expected-loss inputs under IRB credit-risk modeling. EL = PD × LGD × EAD.
+
+- **Related entities:** Loan, Customer
+- **Typical columns:** `pd`, `lgd`, `ead`, `expected_loss`
+
+## Value at Risk (VaR) / Expected Shortfall (ES)
+
+Market-risk measures on a Trade or Portfolio at a confidence interval
+and horizon.
+
+- **Related entities:** Trade, Position, FinancialInstrument
+- **Typical columns:** `var_95`, `var_99`, `expected_shortfall`, `es`
+
+## Sharpe Ratio
+
+`(Return − risk-free rate) / return std-dev`. Risk-adjusted return for
+a portfolio.
+
+- **Related entities:** Position, Portfolio
+- **Typical columns:** `sharpe`, `sharpe_ratio`
+
+## Assets Under Management (AUM)
+
+Total market value of client assets managed. Primary scale metric for
+asset managers.
+
+- **Related entities:** Account, Position
+- **Typical columns:** `aum`
+
+## Loss Ratio (Insurance)
+
+`Claims paid / premiums earned`. Insurance profitability.
+
+- **Related entities:** Policy, Claim, Premium
+- **Typical columns:** `loss_ratio`
+
+## Combined Ratio (Insurance)
+
+Loss ratio + expense ratio. <100% = underwriting profit.
+
+- **Related entities:** Policy, Claim
+- **Typical columns:** `combined_ratio`
+
+## Days Payables / Receivables Outstanding (DPO / DSO)
+
+Working-capital metrics.
+
+- **Related entities:** Transaction, Account
+- **Typical columns:** `dso`, `dpo`

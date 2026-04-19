@@ -194,3 +194,111 @@ Campaign audience.
 Predicted net revenue from a Customer over their entire relationship.
 
 - **Typical columns:** `ltv`, `clv`, `customer_lifetime_value`
+
+---
+
+# CRM / Marketing Metrics & KPIs
+
+Funnel, revenue, and service measures. Surface as ``related_terms`` on
+Lead, Opportunity, Campaign, and Case entities.
+
+## Customer Acquisition Cost (CAC)
+
+`Marketing + sales spend / new Customers acquired` in a window.
+
+- **Related entities:** Customer, Campaign
+- **Typical columns:** `cac`
+
+## CAC Payback Period
+
+Months to recover CAC from a Customer's contribution margin.
+
+- **Related entities:** Customer
+- **Typical columns:** `cac_payback_months`
+
+## Lead-to-Opportunity Conversion Rate
+
+`Opportunities created / Leads generated`.
+
+- **Related entities:** Lead, Opportunity
+- **Typical columns:** `lead_to_oppty_rate`, `mql_conversion`
+
+## Opportunity Win Rate
+
+`Closed-Won Opportunities / Closed Opportunities`.
+
+- **Related entities:** Opportunity
+- **Typical columns:** `win_rate`, `close_rate`
+
+## Sales Cycle Length
+
+Average days from Opportunity creation to Closed-Won / Closed-Lost.
+
+- **Related entities:** Opportunity
+- **Typical columns:** `cycle_days`, `sales_cycle_length`
+
+## Pipeline Coverage
+
+`Open pipeline ARR / quota target` for a period. >3× typically healthy.
+
+- **Related entities:** Opportunity
+- **Typical columns:** `pipeline_coverage`, `coverage_ratio`
+
+## Annual Recurring Revenue (ARR) / Monthly Recurring Revenue (MRR)
+
+Normalized subscription revenue — the baseline for SaaS metrics.
+
+- **Related entities:** Opportunity, Account
+- **Typical columns:** `arr`, `mrr`
+
+## Net Revenue Retention (NRR) / Gross Revenue Retention (GRR)
+
+`(Starting ARR + expansion − churn − contraction) / starting ARR` (NRR
+includes expansion; GRR doesn't).
+
+- **Related entities:** Account
+- **Typical columns:** `nrr`, `grr`
+
+## Logo Churn / Revenue Churn
+
+Share of Accounts lost (logo) or ARR lost (revenue) in a window.
+
+- **Related entities:** Account
+- **Typical columns:** `churn_rate`, `logo_churn`, `revenue_churn`
+
+## CSAT / NPS / CES
+
+Customer-satisfaction survey metrics — Customer Satisfaction Score,
+Net Promoter Score, Customer Effort Score.
+
+- **Related entities:** Customer, Case
+- **Typical columns:** `csat`, `nps`, `ces`
+
+## First Response Time (FRT) / Mean Time to Resolution (MTTR)
+
+Service-desk SLA metrics on Cases.
+
+- **Related entities:** Case
+- **Typical columns:** `frt`, `first_response_minutes`, `mttr`,
+  `resolution_minutes`
+
+## Cost per Lead / Cost per Acquisition
+
+Marketing spend divided by Leads or conversions. Channel efficiency.
+
+- **Related entities:** Lead, Campaign
+- **Typical columns:** `cpl`, `cpa`
+
+## Click-Through Rate (CTR) / Conversion Rate (CVR)
+
+Ad-performance funnel metrics.
+
+- **Related entities:** Campaign
+- **Typical columns:** `ctr`, `cvr`
+
+## Return on Ad Spend (ROAS)
+
+`Attributed revenue / ad spend`.
+
+- **Related entities:** Campaign, Conversion
+- **Typical columns:** `roas`

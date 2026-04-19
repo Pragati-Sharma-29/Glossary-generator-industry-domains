@@ -213,3 +213,130 @@ GS1 18-digit identifier for a logistics unit (pallet, carton) in
 transit.
 
 - **Typical columns:** `sscc`, `shipping_container_id`
+
+---
+
+# Retail / E-commerce Metrics & KPIs
+
+Standard derived measures commonly computed from the entities above. The
+agent surfaces these as ``related_terms`` on the parent entity (e.g.
+AOV and Conversion Rate appear under Order).
+
+## Gross Merchandise Value (GMV)
+
+Total monetary value of Orders placed over a period, before refunds and
+cancellations. `SUM(order.total)` over window.
+
+- **Related entities:** Order, Order Item
+- **Typical columns:** `gmv`, `gross_sales`
+
+## Net Revenue
+
+GMV minus returns, refunds, and discounts. The revenue figure that flows
+to finance.
+
+- **Related entities:** Order, Return
+- **Typical columns:** `net_revenue`, `net_sales`
+
+## Average Order Value (AOV)
+
+`GMV / number of Orders`. Key monetization metric.
+
+- **Related entities:** Order
+- **Typical columns:** `aov`
+
+## Conversion Rate
+
+`Orders / Sessions` over a window. Measures funnel efficiency.
+
+- **Related entities:** Session, Order
+- **Typical columns:** `conversion_rate`, `cvr`
+
+## Cart Abandonment Rate
+
+`1 - (Orders from carts / carts created)`. High values flag checkout
+friction.
+
+- **Related entities:** Cart, Order
+- **Typical columns:** `abandonment_rate`
+
+## Click-Through Rate (CTR)
+
+`Clicks / Impressions` for a product or ad placement.
+
+- **Related entities:** Event, Product
+- **Typical columns:** `ctr`, `click_through_rate`
+
+## Revenue per Visitor (RPV)
+
+`GMV / Sessions`. Combines conversion × AOV into one number.
+
+- **Related entities:** Session
+- **Typical columns:** `rpv`, `revenue_per_session`
+
+## Customer Lifetime Value (CLV / LTV)
+
+Predicted total Net Revenue from a Customer across their full
+relationship.
+
+- **Related entities:** Customer, Loyalty Member
+- **Typical columns:** `clv`, `ltv`
+
+## Customer Acquisition Cost (CAC)
+
+Marketing spend divided by new Customers acquired. Pairs with CLV for
+unit economics.
+
+- **Related entities:** Customer, Campaign
+- **Typical columns:** `cac`
+
+## Repeat Purchase Rate
+
+Share of Customers who place more than one Order in a window.
+
+- **Related entities:** Customer, Order
+- **Typical columns:** `repeat_rate`, `repeat_purchase_rate`
+
+## Return Rate
+
+`Returns / Orders` (count or value basis).
+
+- **Related entities:** Return, Order
+- **Typical columns:** `return_rate`
+
+## Sell-Through Rate
+
+Units sold divided by units received over a window. Measures inventory
+velocity for a SKU.
+
+- **Related entities:** Product, Inventory, Order Item
+- **Typical columns:** `sell_through`, `sell_through_rate`
+
+## Inventory Turnover
+
+`Cost of goods sold / average Inventory value`. Annualized.
+
+- **Related entities:** Inventory, Order Item
+- **Typical columns:** `turnover`, `inventory_turns`
+
+## Days Sales of Inventory (DSI)
+
+`365 / Inventory Turnover`. Days to sell the average inventory.
+
+- **Related entities:** Inventory
+- **Typical columns:** `dsi`, `days_sales_inventory`
+
+## Gross Margin
+
+`(Net Revenue − COGS) / Net Revenue`. Profitability per unit sold.
+
+- **Related entities:** Order Item, Product
+- **Typical columns:** `gross_margin`, `margin_pct`
+
+## Net Promoter Score (NPS)
+
+Share of promoters minus share of detractors from customer surveys.
+Customer-experience benchmark.
+
+- **Related entities:** Customer
+- **Typical columns:** `nps`
