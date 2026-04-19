@@ -28,6 +28,7 @@ class AgentConfig:
 
     # Behaviour
     max_tables: int = 50
+    max_mappings_per_table: int = 50
     publish: bool = False  # dry-run by default
 
     extra: dict = field(default_factory=dict)
