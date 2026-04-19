@@ -149,7 +149,7 @@ def index(request: Request) -> HTMLResponse:
         {
             "default_project": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
             "default_glossary": os.environ.get("DATAPLEX_GLOSSARY_ID", ""),
-            "default_location": os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
+            "default_location": os.environ.get("GOOGLE_CLOUD_LOCATION", "europe-west4"),
             "rag_corpus_prefix": RAG_CORPUS_PREFIX,
             "domain_choices": DOMAIN_CHOICES,
         },
@@ -163,7 +163,7 @@ async def suggest(
     project_id: str = Form(...),
     dataset_id: str = Form(...),
     instructions: str = Form(""),
-    location: str = Form("us-central1"),
+    location: str = Form("europe-west4"),
     glossary_id: str = Form(""),
     glossary_location: str = Form("global"),
     session_id: Optional[str] = Cookie(None, alias="glossary_session"),
