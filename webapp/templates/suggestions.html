@@ -20,6 +20,29 @@
 </section>
 {% endif %}
 
+{% if detected_industry and detected_industry.domain %}
+<section class="card {% if not detected_industry.corpus_used %}warning-card{% endif %}">
+  <h3>Detected industry</h3>
+  {% if detected_industry.corpus_used %}
+    <p>
+      <strong>{{ detected_industry.domain_label or detected_industry.domain }}</strong>
+      <span class="meta">(confidence {{ "%.2f"|format(detected_industry.confidence) }})</span>
+      &nbsp;·&nbsp; grounding corpus resolved.
+    </p>
+  {% else %}
+    <p>
+      <strong>{{ detected_industry.domain_label or detected_industry.domain }}</strong>
+      — no per-domain corpus available; proceeding with schema-only reasoning.
+      Build the corpus with
+      <code>python scripts/build_rag_corpus.py --domains {{ detected_industry.domain }} …</code>
+    </p>
+  {% endif %}
+  {% if detected_industry.reasoning %}
+    <p class="meta"><em>{{ detected_industry.reasoning }}</em></p>
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Review suggestions</h2>
   <p class="meta">

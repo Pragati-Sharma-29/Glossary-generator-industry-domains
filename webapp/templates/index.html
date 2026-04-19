@@ -7,9 +7,10 @@
   down which tables the agent should annotate.</p>
 
   <p class="meta">
-    Grounding: Vertex AI RAG corpus
-    <code>{{ rag_corpus_display_name }}</code>
-    (resolved automatically from your project).
+    Grounding: the agent infers the industry from your dataset's tables
+    and columns, then grounds suggestions in the matching per-domain
+    RAG corpus (prefix <code>{{ rag_corpus_prefix }}</code>). If you
+    want to override, mention the industry in the Instructions field.
   </p>
   <p class="meta">
     <strong>Recommended:</strong> run a Dataplex <code>DATA_PROFILE</code>
@@ -18,7 +19,7 @@
     are still processed but with schema only and lower confidence.
   </p>
 
-  <form method="post" action="/suggest" id="gen-form">
+  <form method="post" action="/suggest" id="gen-form" enctype="multipart/form-data">
     <div class="inline-field">
       <label>
         GCP project id
@@ -52,9 +53,14 @@
     </fieldset>
 
     <label>
-      Instructions <span class="hint">(optional)</span>
+      Instructions <span class="hint">(optional — use this to hint the industry or vocabulary)</span>
       <textarea name="instructions" rows="3"
-                placeholder="e.g. P&amp;C insurance claims mart; prefer ACORD vocabulary"></textarea>
+                placeholder="e.g. This is a retail loyalty mart. Or: P&amp;C insurance claims; prefer ACORD vocabulary."></textarea>
+    </label>
+
+    <label>
+      Reference PDF <span class="hint">(optional — an internal glossary, style guide, or spec up to 10 MB; text is extracted and folded into the instructions)</span>
+      <input type="file" name="reference_pdf" accept="application/pdf">
     </label>
 
     <details>

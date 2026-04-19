@@ -15,7 +15,7 @@ class AgentConfig:
     """
 
     project_id: str
-    location: str = "us-central1"
+    location: str = "europe-west4"
 
     # Vertex AI
     vertex_model: str = "gemini-2.5-pro"
@@ -37,7 +37,7 @@ class AgentConfig:
     def from_env(cls, **overrides) -> "AgentConfig":
         values = {
             "project_id": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
-            "location": os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
+            "location": os.environ.get("GOOGLE_CLOUD_LOCATION", "europe-west4"),
             "vertex_model": os.environ.get("VERTEX_MODEL", "gemini-2.5-pro"),
             "vertex_rag_corpus": os.environ.get("VERTEX_RAG_CORPUS"),
             "dataplex_location": os.environ.get("DATAPLEX_LOCATION", "us-central1"),

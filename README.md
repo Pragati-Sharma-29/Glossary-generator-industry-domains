@@ -134,10 +134,19 @@ uvicorn webapp:app --reload --port 8080
 # open http://localhost:8080
 ```
 
-The web app **always** grounds suggestions in the corpus built by
-`scripts/build_rag_corpus.py` (display name `industry-glossaries` by default).
-Users cannot supply an alternative corpus from the UI — it is resolved
-automatically by display name from the project they enter.
+The web app grounds each request in a **per-industry RAG corpus** built
+by `scripts/build_rag_corpus.py`. One corpus per domain (retail, finance,
+healthcare, ERP, CRM, telco, automotive) is created with display name
+`industry-glossaries-<domain>`, and the UI's Industry dropdown routes the
+query to exactly one of them. This prevents cross-domain bleed (e.g.
+healthcare vocabulary leaking into retail suggestions).
+
+The primary grounding for every corpus is the hand-curated markdown in
+`seed_docs/<domain>.md` — guaranteed content, no live GitHub fetch
+required. Set `GITHUB_TOKEN` (PAT with `public_repo` scope) before running
+the build to also pull optional augmentation from live repos (FIBO, FHIR,
+commercetools, …); without it, the build uses seed docs only and still
+works.
 
 Flow:
 

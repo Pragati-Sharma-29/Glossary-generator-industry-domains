@@ -48,8 +48,8 @@ class VertexRagClient:
             retrieval = rag.Retrieval(
                 source=rag.VertexRagStore(
                     rag_resources=[rag.RagResource(rag_corpus=self.rag_corpus)],
-                    similarity_top_k=10,
-                    vector_distance_threshold=0.5,
+                    similarity_top_k=30,
+                    vector_distance_threshold=0.7,
                 ),
             )
             tools.append(Tool.from_retrieval(retrieval=retrieval))
@@ -86,13 +86,19 @@ class VertexRagClient:
         response_schema: Optional[dict] = None,
         temperature: float = 0.2,
     ) -> dict:
-        """Call Gemini with RAG grounding and parse a JSON response."""
+        """Call Gemini with RAG grounding and parse a JSON response.
+
+        ``response_schema`` is intentionally ignored: Gemini's controlled
+        generation cannot be combined with RAG grounding tools, and the
+        Vertex SDK's Schema proto is brittle across versions (see commit
+        history). We rely on ``response_mime_type=application/json`` plus
+        the explicit schema described in the prompt to keep output valid.
+        """
+        del response_schema  # kept in the signature for API stability
         generation_config = {
             "temperature": temperature,
             "response_mime_type": "application/json",
         }
-        if response_schema:
-            generation_config["response_schema"] = response_schema
 
         if system_instruction:
             model = GenerativeModel(

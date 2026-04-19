@@ -17,6 +17,7 @@ Swap ``_SESSIONS`` for Redis / Firestore to run multi-instance in production.
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
 import uuid
@@ -24,7 +25,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
+from fastapi import Cookie, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -40,9 +41,26 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 
-RAG_CORPUS_DISPLAY_NAME = os.environ.get(
-    "VERTEX_RAG_CORPUS_DISPLAY_NAME", "industry-glossaries"
-)
+RAG_CORPUS_PREFIX = os.environ.get("VERTEX_RAG_CORPUS_PREFIX", "industry-glossaries")
+
+# Upload limits for the optional reference PDF attached to an /suggest
+# request. The text we extract is folded into the agent's ``instructions``
+# blob, which both the industry detector and the main LLM call see. 50k
+# characters ≈ 12k Gemini tokens — well under the 1M context window but
+# keeps the detection prompt from blowing up.
+MAX_PDF_BYTES = 10 * 1024 * 1024
+MAX_PDF_EXTRACTED_CHARS = 50_000
+
+DOMAIN_CHOICES = [
+    ("retail_ecommerce", "Retail / E-commerce"),
+    ("finance_banking", "Finance / Banking"),
+    ("healthcare", "Healthcare"),
+    ("erp_supply_chain", "ERP / Supply Chain"),
+    ("crm_marketing", "CRM / Marketing"),
+    ("telco", "Telco"),
+    ("automotive", "Automotive"),
+]
+DOMAIN_LABELS = dict(DOMAIN_CHOICES)
 
 app = FastAPI(title="Glossary Generator")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -54,29 +72,84 @@ _SESSIONS: dict[str, dict] = {}
 
 # ── RAG corpus resolver ─────────────────────────────────────────────────────
 
-@lru_cache(maxsize=16)
-def _resolve_rag_corpus(project_id: str, location: str) -> str:
-    """Look up the built-in RAG corpus resource name by display name.
+@lru_cache(maxsize=64)
+def _resolve_domain_corpus(project_id: str, location: str, domain: str) -> str:
+    """Resolve the RAG corpus for a single industry domain.
 
-    Cached per (project, location) so we pay the list_corpora cost once per
-    process. Raises ``RuntimeError`` with a clear pointer to the build script
-    if the corpus is missing.
+    Looks up a corpus with display name ``{RAG_CORPUS_PREFIX}-{domain}``
+    (the convention produced by ``scripts/build_rag_corpus.py``). Cached
+    per (project, location, domain). Raises ``RuntimeError`` if the
+    per-domain corpus isn't found.
     """
     import vertexai
     from vertexai.preview import rag
 
+    display_name = f"{RAG_CORPUS_PREFIX}-{domain}"
     vertexai.init(project=project_id, location=location)
     for corpus in rag.list_corpora():
-        if corpus.display_name == RAG_CORPUS_DISPLAY_NAME:
-            logger.info("Resolved RAG corpus '%s' → %s",
-                        RAG_CORPUS_DISPLAY_NAME, corpus.name)
+        if corpus.display_name == display_name:
+            logger.info("Resolved RAG corpus '%s' → %s", display_name, corpus.name)
             return corpus.name
     raise RuntimeError(
-        f"RAG corpus with display_name='{RAG_CORPUS_DISPLAY_NAME}' not found "
-        f"in project {project_id} / {location}. "
-        "Run `python scripts/build_rag_corpus.py --project {project_id} "
-        "--gcs-bucket ...` to create it."
+        f"RAG corpus with display_name='{display_name}' not found in "
+        f"{project_id}/{location}. Build it with:\n"
+        f"  python scripts/build_rag_corpus.py --project {project_id} "
+        f"--location {location} --domains {domain} --gcs-bucket <your-bucket>"
     )
+
+
+def _extract_pdf_text(upload: Optional[UploadFile]) -> str:
+    """Return text extracted from an uploaded PDF, or ``""``.
+
+    Best-effort: failures (encrypted PDF, malformed file, empty pages,
+    unsupported type) return an empty string with a logged warning, so
+    the request continues without the reference material rather than
+    failing outright. Enforces a 10 MB upload cap and truncates the
+    extracted text at 50 000 chars to keep the prompt bounded.
+
+    Raises ``ValueError`` for uploads that explicitly exceed the size
+    cap or are obviously not PDFs — those bubble up as 400s.
+    """
+    if upload is None or not upload.filename:
+        return ""
+
+    content_type = (upload.content_type or "").lower()
+    if content_type and "pdf" not in content_type and content_type != "application/octet-stream":
+        raise ValueError(
+            f"Reference document must be a PDF; got content-type {content_type!r}."
+        )
+
+    contents = upload.file.read(MAX_PDF_BYTES + 1)
+    if len(contents) > MAX_PDF_BYTES:
+        raise ValueError(
+            f"PDF exceeds the {MAX_PDF_BYTES // 1024 // 1024} MB upload limit."
+        )
+    if not contents:
+        return ""
+
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:  # defensive: requirement is declared
+        logger.error("pypdf not installed: %s", exc)
+        return ""
+
+    try:
+        reader = PdfReader(io.BytesIO(contents))
+        pages_text = [(p.extract_text() or "") for p in reader.pages]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PDF extraction failed for %s: %s", upload.filename, exc)
+        return ""
+
+    text = "\n\n".join(t.strip() for t in pages_text if t.strip())
+    if not text:
+        return ""
+    if len(text) > MAX_PDF_EXTRACTED_CHARS:
+        text = text[:MAX_PDF_EXTRACTED_CHARS] + "\n\n[... PDF truncated ...]"
+    logger.info(
+        "Extracted %d chars from %s (%d pages)",
+        len(text), upload.filename, len(pages_text),
+    )
+    return text
 
 
 def _get_or_create_session_id(session_id: Optional[str], response: Response) -> str:
@@ -139,8 +212,9 @@ def index(request: Request) -> HTMLResponse:
         {
             "default_project": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
             "default_glossary": os.environ.get("DATAPLEX_GLOSSARY_ID", ""),
-            "default_location": os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
-            "rag_corpus_display_name": RAG_CORPUS_DISPLAY_NAME,
+            "default_location": os.environ.get("GOOGLE_CLOUD_LOCATION", "europe-west4"),
+            "rag_corpus_prefix": RAG_CORPUS_PREFIX,
+            "domain_choices": DOMAIN_CHOICES,
         },
     )
 
@@ -152,9 +226,10 @@ async def suggest(
     project_id: str = Form(...),
     dataset_id: str = Form(...),
     instructions: str = Form(""),
-    location: str = Form("us-central1"),
+    location: str = Form("europe-west4"),
     glossary_id: str = Form(""),
     glossary_location: str = Form("global"),
+    reference_pdf: Optional[UploadFile] = File(None),
     session_id: Optional[str] = Cookie(None, alias="glossary_session"),
 ) -> HTMLResponse:
     sid = _get_or_create_session_id(session_id, response)
@@ -163,26 +238,47 @@ async def suggest(
     table_allowlist = [v for v in form.getlist("tables") if v]
 
     try:
-        rag_corpus = _resolve_rag_corpus(project_id, location)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Could not resolve RAG corpus")
+        pdf_text = _extract_pdf_text(reference_pdf)
+    except ValueError as exc:
         return templates.TemplateResponse(
             request,
             "error.html",
-            {"error": f"{type(exc).__name__}: {exc}"},
-            status_code=500,
+            {"error": str(exc)},
+            status_code=400,
         )
+    if pdf_text:
+        instructions = (
+            f"{instructions}\n\n"
+            f"## Reference document: {reference_pdf.filename}\n\n"
+            f"{pdf_text}"
+        ).strip()
+
+    # A corpus resolver closure is passed to the agent — when the agent's
+    # detector picks a domain, this callable returns the matching per-domain
+    # corpus resource name (or None if there isn't one). Detection failures
+    # propagate here as a skipped corpus, not an error response, so the
+    # agent can still produce schema-only suggestions.
+    def corpus_resolver(detected_domain: str) -> Optional[str]:
+        if detected_domain not in DOMAIN_LABELS:
+            return None
+        try:
+            return _resolve_domain_corpus(project_id, location, detected_domain)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "No corpus for detected domain %s: %s", detected_domain, exc
+            )
+            return None
 
     config = AgentConfig.from_env(
         project_id=project_id,
         location=location,
-        vertex_rag_corpus=rag_corpus,
+        vertex_rag_corpus=None,  # resolved at runtime via corpus_resolver
         glossary_id=glossary_id or None,
         glossary_location=glossary_location,
     )
 
     try:
-        agent = GlossaryGeneratorAgent(config)
+        agent = GlossaryGeneratorAgent(config, corpus_resolver=corpus_resolver)
         result = agent.run(
             dataset_id,
             instructions=instructions,
@@ -198,6 +294,10 @@ async def suggest(
             status_code=500,
         )
 
+    detected = result.get("detected_industry") or {}
+    if detected.get("domain") in DOMAIN_LABELS:
+        detected["domain_label"] = DOMAIN_LABELS[detected["domain"]]
+
     _SESSIONS[sid] = {
         "config": {
             "project_id": project_id,
@@ -208,6 +308,7 @@ async def suggest(
         "dataset_id": dataset_id,
         "instructions": instructions,
         "suggestion": result["suggestion"],
+        "detected_industry": detected,
     }
 
     html = templates.TemplateResponse(
@@ -218,6 +319,7 @@ async def suggest(
             "instructions": instructions,
             "glossary_id": glossary_id,
             "suggestion": result["suggestion"],
+            "detected_industry": detected,
             "tables_without_scans": result.get("tables_without_scans", []),
         },
     )

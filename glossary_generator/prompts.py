@@ -113,5 +113,28 @@ with business meaning) and drop generic operational columns.
 
 {dataset_summary}
 
-Return a JSON object with keys: industry, domain, rationale, terms, mappings.
+Return ONLY a JSON object (no prose, no code fences) with this exact shape:
+
+{{
+  "industry": "<string, or 'Unknown'>",
+  "domain": "<string, or 'Unknown'>",
+  "rationale": "<string>",
+  "terms": [
+    {{
+      "display_name": "<string>",
+      "definition": "<string>",
+      "synonyms": ["<string>", ...],
+      "related_terms": ["<string>", ...]
+    }}
+  ],
+  "mappings": [
+    {{
+      "term_display_name": "<string, matches a term.display_name>",
+      "table_id": "<string>",
+      "column_name": "<string>",
+      "confidence": 0.0,
+      "rationale": "<string>"
+    }}
+  ]
+}}
 """

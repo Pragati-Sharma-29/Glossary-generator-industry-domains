@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from .bigquery_client import BigQueryCollector
 from .config import AgentConfig
 from .dataplex_client import DataplexInsightsCollector
 from .glossary_publisher import GlossaryPublisher
+from .industry_detector import detect_domain
 from .models import (
     ColumnMapping,
     ColumnProfile,
@@ -29,6 +30,9 @@ from .vertex_rag import VertexRagClient
 logger = logging.getLogger(__name__)
 
 
+CorpusResolver = Callable[[str], Optional[str]]
+
+
 class GlossaryGeneratorAgent:
     """Entry point combining collection → LLM reasoning → publishing."""
 
@@ -40,17 +44,26 @@ class GlossaryGeneratorAgent:
         dataplex: Optional[DataplexInsightsCollector] = None,
         vertex: Optional[VertexRagClient] = None,
         publisher: Optional[GlossaryPublisher] = None,
+        corpus_resolver: Optional[CorpusResolver] = None,
     ):
         self.config = config
         self.bq = bq or BigQueryCollector(config.project_id)
         self.dataplex = dataplex or DataplexInsightsCollector(
             config.project_id, config.dataplex_location
         )
+        # When a corpus_resolver is supplied we detect the domain first and
+        # then rebind the Vertex client to the matching per-domain corpus,
+        # so the initial client is created WITHOUT grounding. Otherwise we
+        # honour whatever single corpus was passed in ``config``.
+        self.corpus_resolver = corpus_resolver
+        initial_corpus = (
+            None if corpus_resolver is not None else config.vertex_rag_corpus
+        )
         self.vertex = vertex or VertexRagClient(
             config.project_id,
             config.location,
             model=config.vertex_model,
-            rag_corpus=config.vertex_rag_corpus,
+            rag_corpus=initial_corpus,
         )
         self._publisher = publisher
 
@@ -79,6 +92,10 @@ class GlossaryGeneratorAgent:
         logger.info("Enriching with Dataplex data insights")
         ctx = self.dataplex.enrich(ctx)
 
+        detection: dict = {}
+        if self.corpus_resolver is not None:
+            detection = self._detect_and_bind_corpus(ctx, instructions)
+
         logger.info("Prompting Vertex (%s) with RAG grounding", self.config.vertex_model)
         suggestion = self._invoke_llm(ctx, instructions)
 
@@ -86,11 +103,59 @@ class GlossaryGeneratorAgent:
             "suggestion": suggestion.to_dict(),
             "tables_without_scans": list(ctx.tables_without_scans),
         }
+        if detection:
+            result["detected_industry"] = detection
 
         publish = self.config.publish if publish is None else publish
         if publish:
             result["publish_report"] = self._publish(suggestion, dataset_id)
         return result
+
+    # ------------------------------------------------------------------ detection
+
+    def _detect_and_bind_corpus(
+        self, ctx: DatasetContext, instructions: str
+    ) -> dict:
+        """Infer the industry from the schema and rebind Vertex to its corpus.
+
+        Runs one lightweight LLM call (no RAG) to classify the dataset, then
+        looks the resolved corpus up via ``self.corpus_resolver``. If
+        detection returns ``unknown`` or the resolver has no corpus for the
+        chosen domain, grounding is skipped — the agent still produces
+        suggestions using schema-only reasoning.
+        """
+        logger.info("Detecting industry domain from schema signals")
+        domain, confidence, reasoning = detect_domain(
+            self.vertex, ctx, instructions
+        )
+
+        corpus_name: Optional[str] = None
+        if domain != "unknown" and self.corpus_resolver is not None:
+            try:
+                corpus_name = self.corpus_resolver(domain)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Corpus resolver raised for %s: %s", domain, exc)
+
+        if corpus_name:
+            logger.info("Binding Vertex client to %s corpus %s", domain, corpus_name)
+            self.vertex = VertexRagClient(
+                self.config.project_id,
+                self.config.location,
+                model=self.config.vertex_model,
+                rag_corpus=corpus_name,
+            )
+        else:
+            logger.warning(
+                "Proceeding WITHOUT RAG grounding (domain=%s, corpus_found=%s)",
+                domain, bool(corpus_name),
+            )
+
+        return {
+            "domain": domain,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "corpus_used": corpus_name,
+        }
 
     # ------------------------------------------------------------------ LLM step
 
