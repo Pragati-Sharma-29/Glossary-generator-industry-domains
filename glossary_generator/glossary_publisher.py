@@ -392,8 +392,28 @@ def _term_description(term: TermSuggestion) -> str:
     description so they're visible in the Catalog UI and searchable.
     """
     parts = [term.definition.strip()]
-    if term.synonyms:
-        parts.append("**Also known as:** " + ", ".join(term.synonyms))
-    if term.related_terms:
-        parts.append("**Related:** " + ", ".join(term.related_terms))
+    synonyms = _format_related(term.synonyms)
+    if synonyms:
+        parts.append("**Also known as:** " + synonyms)
+    related = _format_related(term.related_terms)
+    if related:
+        parts.append("**Related:** " + related)
     return "\n\n".join(p for p in parts if p)
+
+
+def _format_related(items: list) -> str:
+    """Render synonyms / related_terms into a comma-joined string.
+
+    ``TermSuggestion`` stores these as ``list[dict]`` of
+    ``{"name": str, "description": str}``, but tolerate plain strings
+    too so legacy callers keep working.
+    """
+    names: list[str] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            name = (item.get("name") or "").strip()
+        else:
+            name = str(item).strip()
+        if name:
+            names.append(name)
+    return ", ".join(names)
