@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from typing import Any, Optional
 from urllib.parse import quote
@@ -149,11 +150,18 @@ class GlossaryPublisher:
         Returns a structured report.
         """
         report: dict = {
+            "glossary": None,
             "created_terms": [],
             "skipped_terms": [],
             "mappings": [],
             "term_links": [],
         }
+
+        # 0) Ensure the target glossary itself exists — create at ``global``
+        #    if it doesn't, per spec. Without this every term create would
+        #    404 on a glossary-id that the operator typed but never created.
+        if not self._ensure_glossary(report):
+            return report
 
         # 1) Ensure each referenced term exists.
         for term in suggestion.terms:
@@ -171,6 +179,154 @@ class GlossaryPublisher:
             report["term_links"].append(self._create_term_link(link))
 
         return report
+
+    # ──────────────────────────────────────────────────── glossary creation
+
+    def _ensure_glossary(self, report: dict) -> bool:
+        """Check the target glossary exists; auto-create at ``global`` if not.
+
+        Workflow
+        --------
+        1. GET ``projects/{p}/locations/{self.location}/glossaries/{id}``.
+           If 200 → recorded as "exists", proceed.
+        2. On 404 we re-pin ``self.location`` to ``global`` and POST
+           ``projects/{p}/locations/global/glossaries?glossaryId={id}``.
+           All downstream term + link URLs rebuild from ``self.glossary_name``
+           (a property) so they automatically use the new location.
+        3. The create response is a Google LRO; if so, poll briefly until it
+           reports done so the term creates that follow don't race.
+
+        Returns ``True`` if the glossary exists (or was successfully
+        created), ``False`` if publish should abort.
+        """
+        if self.dry_run:
+            report["glossary"] = {
+                "name": self.glossary_name,
+                "status": "dry-run",
+            }
+            return True
+
+        get_url = f"{_DATAPLEX_REST}/{self.glossary_name}"
+        try:
+            resp = self._rest("GET", get_url)
+        except requests.RequestException as exc:
+            report["glossary"] = {
+                "name": self.glossary_name,
+                "status": f"GET error: {exc}",
+            }
+            return False
+
+        if resp.status_code == 200:
+            report["glossary"] = {"name": self.glossary_name, "status": "exists"}
+            return True
+
+        if resp.status_code != 404:
+            logger.error(
+                "GET glossary %s unexpectedly returned %d: %s",
+                self.glossary_name, resp.status_code, resp.text[:300],
+            )
+            report["glossary"] = {
+                "name": self.glossary_name,
+                "status": f"GET HTTP {resp.status_code}: {resp.text[:200]}",
+            }
+            return False
+
+        # 404 — pin to global and create.
+        previous_location = self.location
+        self.location = "global"
+        logger.info(
+            "Glossary '%s' not found at '%s'; auto-creating at 'global'",
+            self.glossary_id, previous_location,
+        )
+
+        create_url = (
+            f"{_DATAPLEX_REST}/projects/{self.project_id}"
+            f"/locations/global/glossaries"
+        )
+        body = {
+            "displayName": self.glossary_id.replace("-", " ").replace("_", " "),
+            "description": (
+                "Auto-created by the Glossary Generator when an operator-"
+                "supplied glossary id was not found."
+            ),
+        }
+        try:
+            cresp = self._rest(
+                "POST", create_url,
+                params={"glossaryId": self.glossary_id},
+                json_body=body,
+            )
+        except requests.RequestException as exc:
+            report["glossary"] = {
+                "name": self.glossary_name,
+                "status": f"create error: {exc}",
+            }
+            return False
+
+        if cresp.status_code == 409:
+            report["glossary"] = {
+                "name": self.glossary_name,
+                "status": "exists at global (409 on create)",
+            }
+            return True
+
+        if cresp.status_code not in (200, 201, 202):
+            logger.error(
+                "create_glossary HTTP %d for %s: %s",
+                cresp.status_code, self.glossary_name, cresp.text[:500],
+            )
+            report["glossary"] = {
+                "name": self.glossary_name,
+                "status": (
+                    f"create failed HTTP {cresp.status_code}: "
+                    f"{cresp.text[:300]}"
+                ),
+            }
+            return False
+
+        # Created. Wait briefly if Dataplex returned an LRO envelope.
+        try:
+            body = cresp.json()
+        except ValueError:
+            body = {}
+        op_name = body.get("name", "")
+        if op_name.startswith(
+            f"projects/{self.project_id}/locations/global/operations/"
+        ):
+            self._wait_for_lro(op_name, timeout_s=30)
+
+        report["glossary"] = {
+            "name": self.glossary_name,
+            "status": f"auto-created at global (was missing at '{previous_location}')",
+        }
+        return True
+
+    def _wait_for_lro(self, operation_name: str, *, timeout_s: int = 30) -> None:
+        """Best-effort poll of a Dataplex long-running operation.
+
+        Returns when the LRO reports ``done=true`` or the timeout elapses;
+        errors are logged but never raised, since the caller already
+        reported the create as successful. Subsequent term creates will
+        fail loudly if the glossary didn't actually materialise.
+        """
+        url = f"{_DATAPLEX_REST}/{operation_name}"
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                resp = self._rest("GET", url)
+            except requests.RequestException:
+                time.sleep(2)
+                continue
+            if resp.status_code == 200:
+                data = resp.json() if resp.content else {}
+                if data.get("done"):
+                    if "error" in data:
+                        logger.warning(
+                            "LRO %s reported error: %s", operation_name, data["error"],
+                        )
+                    return
+            time.sleep(2)
+        logger.warning("LRO %s did not complete within %ds", operation_name, timeout_s)
 
     # ──────────────────────────────────────────────────── term creation
 

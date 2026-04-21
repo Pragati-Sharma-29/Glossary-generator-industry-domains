@@ -8,6 +8,11 @@
     <strong>{{ total_count }}</strong> suggested mappings to Dataplex glossary
     <code>{{ glossary_id }}</code> in project <code>{{ project_id }}</code>.
   </p>
+  {% if report.glossary %}
+    <p class="meta">
+      Glossary <code>{{ report.glossary.name }}</code> — {{ report.glossary.status }}.
+    </p>
+  {% endif %}
 </section>
 
 <section class="card">
