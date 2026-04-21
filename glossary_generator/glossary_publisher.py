@@ -85,13 +85,17 @@ class GlossaryPublisher:
     def _bigquery_column_entry(self, dataset_id: str, table_id: str) -> str:
         """Resource name of the BigQuery table entry.
 
+        Dataplex's auto-catalogued ``@bigquery`` entries use the URL-encoded
+        form of ``bigquery.googleapis.com/projects/<p>/datasets/<d>/tables/<t>``
+        as the entry id — **no** leading ``//``. Using ``//bigquery.googleapis.com``
+        here produced an HTTP 400 ``entry name reference invalid`` from
+        Dataplex.
+
         The column itself is referenced via the ``path`` field on the
         ``EntryReference`` (``Schema.<column_name>``).
         """
-        # Dataplex stores a table's entry id as the URL-encoded
-        # ``//bigquery.googleapis.com/...`` full resource name.
         bq_resource = (
-            f"//bigquery.googleapis.com/projects/{self.project_id}"
+            f"bigquery.googleapis.com/projects/{self.project_id}"
             f"/datasets/{dataset_id}/tables/{table_id}"
         )
         return f"{self._bigquery_entry_group()}/entries/{quote(bq_resource, safe='')}"
