@@ -510,8 +510,16 @@ class GlossaryPublisher:
         # entry form, same reasoning as _create_entry_link above.
         parent_resource = self._term_entry_name(parent_slug)
         child_resource = self._term_entry_name(child_slug)
+
+        # Dataplex publishes only two system entry link types for glossary
+        # relationships: ``definition`` (directed, column→term) and
+        # ``related`` (undirected, term↔term). There is no
+        # ``synonymous`` type — requests to it return 403 "or it may not
+        # exist". Map both promoted kinds onto ``related`` here; the
+        # synonym-vs-related distinction lives on in each term's
+        # description ("Synonym of …" / "Related to …").
         link_type = (
-            f"projects/dataplex-types/locations/global/entryLinkTypes/{kind}"
+            f"projects/dataplex-types/locations/global/entryLinkTypes/related"
         )
         # Deterministic id so a re-publish with the same (kind, parent,
         # child) triple hits Dataplex 409 → "exists" rather than creating
@@ -538,9 +546,15 @@ class GlossaryPublisher:
         url = f"{_DATAPLEX_REST}/{entry_group}/entryLinks"
         body = {
             "entryLinkType": link_type,
+            # ``related`` is an undirected link type: both references
+            # must be ``UNSPECIFIED``. Using SOURCE/TARGET is the
+            # pattern required for directed types (e.g. ``definition``);
+            # Dataplex returns 400 "EntryLink must have SOURCE and TARGET
+            # reference types for directed entry links, and UNSPECIFIED
+            # reference" otherwise.
             "entryReferences": [
-                {"name": parent_resource, "type": "SOURCE"},
-                {"name": child_resource, "type": "TARGET"},
+                {"name": parent_resource, "type": "UNSPECIFIED"},
+                {"name": child_resource, "type": "UNSPECIFIED"},
             ],
         }
         try:
