@@ -152,6 +152,59 @@ def _extract_pdf_text(upload: Optional[UploadFile]) -> str:
     return text
 
 
+def _friendlier_bq_error(exc: Exception, project_id: str) -> str:
+    """Translate common BigQuery client errors into a useful short message.
+
+    Anything that doesn't match a known pattern is returned verbatim so
+    the raw SDK message still reaches the browser — never swallow the
+    underlying cause.
+    """
+    msg = str(exc)
+    cls = type(exc).__name__
+
+    # Caller not authenticated or ADC missing
+    if "DefaultCredentialsError" in cls or "Could not automatically determine credentials" in msg:
+        return (
+            "No Application Default Credentials found. On Cloud Shell, run "
+            "`gcloud auth application-default login` or redeploy in an "
+            "environment with ADC set up."
+        )
+
+    # Project doesn't exist OR caller doesn't have access to it
+    if "404" in msg or "NotFound" in cls:
+        return (
+            f"BigQuery did not find project '{project_id}'. Double-check the "
+            "id (not the project *name* or number), and confirm the signed-in "
+            "account has access to it."
+        )
+
+    # IAM / permission
+    if "403" in msg or "Forbidden" in cls or "permission" in msg.lower():
+        return (
+            f"The signed-in account can list the project '{project_id}' but "
+            "lacks `bigquery.datasets.list` permission on it. Grant "
+            "roles/bigquery.metadataViewer (or higher) and retry."
+        )
+
+    # API not enabled
+    if "has not been used" in msg or "is disabled" in msg:
+        return (
+            f"The BigQuery API is not enabled on project '{project_id}'. "
+            "Enable it: `gcloud services enable bigquery.googleapis.com "
+            f"--project {project_id}`"
+        )
+
+    # Billing
+    if "billing" in msg.lower():
+        return (
+            f"Project '{project_id}' has no active billing account, which "
+            "BigQuery requires for metadata listing. Link a billing account "
+            "in the Cloud Console and retry."
+        )
+
+    return f"{cls}: {msg}"
+
+
 def _get_or_create_session_id(session_id: Optional[str], response: Response) -> str:
     if session_id and session_id in _SESSIONS:
         return session_id
@@ -170,6 +223,11 @@ def _get_or_create_session_id(session_id: Optional[str], response: Response) -> 
 @app.get("/api/datasets")
 def api_datasets(project_id: str) -> JSONResponse:
     """List BigQuery datasets visible in a project."""
+    project_id = project_id.strip()
+    if not project_id:
+        return JSONResponse(
+            {"error": "Project id is required."}, status_code=400
+        )
     try:
         client = bigquery.Client(project=project_id)
         datasets = [
@@ -182,13 +240,22 @@ def api_datasets(project_id: str) -> JSONResponse:
         ]
     except Exception as exc:  # noqa: BLE001
         logger.exception("list_datasets failed for %s", project_id)
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(
+            {"error": _friendlier_bq_error(exc, project_id)}, status_code=400
+        )
     return JSONResponse({"datasets": datasets})
 
 
 @app.get("/api/tables")
 def api_tables(project_id: str, dataset_id: str) -> JSONResponse:
     """List tables in a dataset. ``dataset_id`` may be ``project.dataset``."""
+    project_id = project_id.strip()
+    dataset_id = dataset_id.strip()
+    if not project_id or not dataset_id:
+        return JSONResponse(
+            {"error": "Project id and dataset id are required."},
+            status_code=400,
+        )
     try:
         client = bigquery.Client(project=project_id)
         ref = dataset_id if "." in dataset_id else f"{project_id}.{dataset_id}"
@@ -198,7 +265,10 @@ def api_tables(project_id: str, dataset_id: str) -> JSONResponse:
         ]
     except Exception as exc:  # noqa: BLE001
         logger.exception("list_tables failed for %s / %s", project_id, dataset_id)
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(
+            {"error": _friendlier_bq_error(exc, project_id)},
+            status_code=400,
+        )
     return JSONResponse({"tables": tables})
 
 
