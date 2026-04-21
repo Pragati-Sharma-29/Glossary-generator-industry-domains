@@ -410,6 +410,10 @@ async def suggest(
             "location": location,
             "glossary_id": glossary_id,
             "glossary_location": glossary_location,
+            # BigQuery dataset region — used later as bq_region on the
+            # publisher so @bigquery entry-group URLs resolve against
+            # the dataset's own location, not the Vertex location.
+            "dataset_location": (result.get("dataset_location") or "us").lower(),
         },
         "dataset_id": dataset_id,
         "instructions": instructions,
@@ -504,7 +508,11 @@ async def publish(
         project_id=cfg["project_id"],
         glossary_id=cfg["glossary_id"],
         location=cfg.get("glossary_location", "global"),
-        bq_region=cfg.get("location", "us-central1"),
+        # bq_region = the BigQuery dataset's own region (picked up by the
+        # agent via dataset.location). This is where @bigquery entries
+        # for that dataset's tables live; using the Vertex region instead
+        # was the cause of 400 "invalid entry reference" on publish.
+        bq_region=cfg.get("dataset_location") or "us",
         dry_run=False,
     )
     report = publisher.publish(

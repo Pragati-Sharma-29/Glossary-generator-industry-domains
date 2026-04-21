@@ -102,6 +102,9 @@ class GlossaryGeneratorAgent:
         result: dict = {
             "suggestion": suggestion.to_dict(),
             "tables_without_scans": list(ctx.tables_without_scans),
+            # BigQuery dataset region (e.g. "US", "us-central1") — the
+            # publisher needs this for the @bigquery entry-group URL.
+            "dataset_location": ctx.location,
         }
         if detection:
             result["detected_industry"] = detection
