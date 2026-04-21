@@ -220,11 +220,18 @@ class GlossaryPublisher:
         Returns a structured report.
         """
         report: dict = {
+            "glossary": {},
             "created_terms": [],
             "skipped_terms": [],
             "mappings": [],
             "term_links": [],
         }
+
+        # 0) Ensure the target glossary exists (auto-create if missing).
+        report["glossary"] = self._ensure_glossary()
+        if report["glossary"].get("status") == "error":
+            # No glossary = nothing else will succeed; short-circuit.
+            return report
 
         # 1) Ensure each referenced term exists.
         for term in suggestion.terms:
@@ -242,6 +249,61 @@ class GlossaryPublisher:
             report["term_links"].append(self._create_term_link(link))
 
         return report
+
+    # ──────────────────────────────────────────────────── glossary creation
+
+    def _ensure_glossary(self) -> dict:
+        """Create the target glossary if it doesn't exist.
+
+        Treats HTTP 409 as success so the flow is idempotent. The
+        display name is derived from the glossary id (hyphen/underscore
+        to space, Title Case) unless the glossary already exists, in
+        which case Dataplex keeps whatever's there.
+        """
+        record: dict = {
+            "name": self.glossary_name,
+            "dry_run": self.dry_run,
+        }
+        if self.dry_run:
+            record["status"] = "dry-run"
+            return record
+
+        parent = f"projects/{self.project_id}/locations/{self.location}"
+        url = f"{_DATAPLEX_REST}/{parent}/glossaries"
+        display_name = (
+            re.sub(r"[-_]+", " ", self.glossary_id).strip().title()
+            or self.glossary_id
+        )
+        body = {
+            "parent": parent,
+            "displayName": display_name,
+            "description": "Auto-created by glossary-generator.",
+        }
+        try:
+            resp = self._rest(
+                "POST", url, params={"glossaryId": self.glossary_id}, json_body=body
+            )
+        except requests.RequestException as exc:
+            logger.error(
+                "create_glossary network error for %s: %s",
+                self.glossary_name, exc,
+            )
+            record["status"] = f"error: {exc}"
+            return record
+
+        if resp.status_code in (200, 201):
+            record["status"] = "created"
+        elif resp.status_code == 409:
+            record["status"] = "exists"
+        else:
+            logger.error(
+                "create_glossary HTTP %d for %s: %s",
+                resp.status_code, self.glossary_name, resp.text[:300],
+            )
+            record["status"] = (
+                f"error: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        return record
 
     # ──────────────────────────────────────────────────── term creation
 

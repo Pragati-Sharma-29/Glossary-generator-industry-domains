@@ -8,6 +8,12 @@
     <strong>{{ total_count }}</strong> suggested mappings to Dataplex glossary
     <code>{{ glossary_id }}</code> in project <code>{{ project_id }}</code>.
   </p>
+  {% if report.glossary and report.glossary.status %}
+    <p class="meta">
+      Glossary <code>{{ glossary_id }}</code>:
+      <strong>{{ report.glossary.status }}</strong>.
+    </p>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -69,7 +75,7 @@
   <p class="meta">
     Structured relationships between promoted synonyms / related terms
     and their parent term, stored in the
-    <code>@dataplex-glossary</code> entry group.
+    <code>@dataplex</code> entry group.
   </p>
   <table class="mappings">
     <thead>
