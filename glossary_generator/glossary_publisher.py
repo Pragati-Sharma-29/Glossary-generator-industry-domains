@@ -74,8 +74,41 @@ class GlossaryPublisher:
         self._client = client  # unused; Dataplex calls go through REST
         self._creds = None
         self._session = requests.Session()
+        self._project_number_cache: Optional[str] = None
 
     # ─────────────────────────────────────────────────────────── resource names
+
+    def _project_number(self) -> str:
+        """Resolve the project number for ``self.project_id``, cached.
+
+        Dataplex accepts either the project id or project number in the
+        outer part of a resource name (it normalises server-side), but
+        when a resource name is embedded as an *entry id* (the segment
+        after ``entries/``) Dataplex requires the numeric form — it
+        rejects entry ids that embed a project id with
+        ``"Entry ID must contain project number"``.
+        """
+        if self._project_number_cache is not None:
+            return self._project_number_cache
+        # If the caller already passed a numeric project id, skip the
+        # Cloud Resource Manager round-trip.
+        if self.project_id.isdigit():
+            self._project_number_cache = self.project_id
+            return self._project_number_cache
+        url = (
+            f"https://cloudresourcemanager.googleapis.com/v1/projects/"
+            f"{self.project_id}"
+        )
+        resp = self._rest("GET", url)
+        resp.raise_for_status()
+        number = str(resp.json().get("projectNumber", "")).strip()
+        if not number:
+            raise RuntimeError(
+                f"Cloud Resource Manager returned no projectNumber for "
+                f"{self.project_id!r}"
+            )
+        self._project_number_cache = number
+        return number
 
     @property
     def glossary_name(self) -> str:
@@ -86,6 +119,13 @@ class GlossaryPublisher:
 
     def _term_name(self, term_id: str) -> str:
         return f"{self.glossary_name}/terms/{term_id}"
+
+    def _term_entry_id(self, term_id: str) -> str:
+        """Term resource name in *entry id* form (project **number**)."""
+        return (
+            f"projects/{self._project_number()}/locations/{self.location}"
+            f"/glossaries/{self.glossary_id}/terms/{term_id}"
+        )
 
     def _bigquery_entry_group(self) -> str:
         return (
@@ -108,10 +148,10 @@ class GlossaryPublisher:
         resources, Dataplex uses the full resource name minus the leading
         ``//`` as the entry id, with literal slashes preserved in the
         JSON body (URL-encoding is only required when embedding this id
-        in a URL path).
+        in a URL path). The embedded project must be the project number.
         """
         entry_id = (
-            f"bigquery.googleapis.com/projects/{self.project_id}"
+            f"bigquery.googleapis.com/projects/{self._project_number()}"
             f"/datasets/{dataset_id}/tables/{table_id}"
         )
         return f"{self._bigquery_entry_group()}/entries/{entry_id}"
@@ -120,10 +160,11 @@ class GlossaryPublisher:
         """Resource name of a glossary term as an Entry under ``@dataplex``.
 
         Dataplex exposes each GlossaryTerm as an Entry whose id is the
-        term's full resource name (literal slashes). Entry links must
+        term's full resource name (literal slashes), and requires that
+        inner resource name to use the project number. Entry links must
         reference terms via this Entry form, not the term resource name.
         """
-        return f"{self._dataplex_entry_group()}/entries/{self._term_name(term_id)}"
+        return f"{self._dataplex_entry_group()}/entries/{self._term_entry_id(term_id)}"
 
     @staticmethod
     def _slug(display_name: str) -> str:
