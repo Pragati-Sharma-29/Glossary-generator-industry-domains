@@ -365,20 +365,22 @@ async def publish(
     ]
 
     # Promoted synonyms / related terms become their own standalone
-    # GlossaryTerms. Dedupe against names we're already publishing so the
-    # API doesn't 409-loop if the user ticks the same name twice or ticks
-    # something that's already a top-level term.
+    # GlossaryTerms plus structured term-to-term entry links of type
+    # "synonymous" or "related". Dedupe against names we're already
+    # publishing so the API doesn't 409-loop if the user ticks the same
+    # name twice or ticks something that's already a top-level term.
     existing_names = {t.display_name.lower() for t in approved_terms}
-    extra_terms = list(
-        _build_promoted_terms(
-            promoted_synonyms, kind="synonym", existing=existing_names
-        )
-    ) + list(
-        _build_promoted_terms(
-            promoted_related, kind="related", existing=existing_names
-        )
-    )
-    approved_terms.extend(extra_terms)
+    term_links: list[dict] = []
+    for term, links in _build_promoted_terms(
+        promoted_synonyms, kind="synonym", existing=existing_names
+    ):
+        approved_terms.append(term)
+        term_links.extend(links)
+    for term, links in _build_promoted_terms(
+        promoted_related, kind="related", existing=existing_names
+    ):
+        approved_terms.append(term)
+        term_links.extend(links)
 
     filtered = GlossarySuggestion(
         industry=suggestion_dict.get("industry", ""),
@@ -399,7 +401,9 @@ async def publish(
         bq_region=cfg.get("location", "us-central1"),
         dry_run=False,
     )
-    report = publisher.publish(filtered, dataset_id=bare_dataset)
+    report = publisher.publish(
+        filtered, dataset_id=bare_dataset, term_links=term_links
+    )
 
     return templates.TemplateResponse(
         request,
@@ -442,13 +446,16 @@ def _build_promoted_terms(
     kind: str,
     existing: set[str],
 ):
-    """Yield TermSuggestions for user-ticked synonyms or related terms.
+    """Yield ``(TermSuggestion, [link_request, …])`` for promoted values.
 
     Form values are formatted as ``"<derived_name>|<parent_display_name>"``
     (see suggestions.html). Each unique derived name is emitted once —
     even if ticked under multiple parents, we still only create one term
-    and merge parent refs into its description. ``kind`` is either
-    ``"synonym"`` or ``"related"`` and controls the description prefix.
+    and emit one link request per (child, parent) pair so Dataplex ends
+    up with structured term-to-term relationships in addition to the
+    description text. ``kind`` is either ``"synonym"`` or ``"related"``;
+    the entry-link type on the link request is ``"synonymous"`` or
+    ``"related"`` respectively (the Dataplex-standard type names).
     """
     seen: dict[str, list[str]] = {}
     for raw in values:
@@ -461,12 +468,19 @@ def _build_promoted_terms(
         seen.setdefault(name, []).append(parent)
 
     prefix = "Synonym of" if kind == "synonym" else "Related to"
+    link_type = "synonymous" if kind == "synonym" else "related"
     for name, parents in seen.items():
-        parent_ref = ", ".join(dict.fromkeys(parents))
-        yield TermSuggestion(
+        dedup_parents = list(dict.fromkeys(parents))
+        parent_ref = ", ".join(dedup_parents)
+        term = TermSuggestion(
             display_name=name,
             definition=f"{prefix} {parent_ref}.",
             synonyms=[],
-            related_terms=list(dict.fromkeys(parents)),
+            related_terms=dedup_parents,
         )
-        existing.add(name.lower())  # block duplicate emission across calls
+        links = [
+            {"parent": parent, "child": name, "kind": link_type}
+            for parent in dedup_parents
+        ]
+        yield term, links
+        existing.add(name.lower())

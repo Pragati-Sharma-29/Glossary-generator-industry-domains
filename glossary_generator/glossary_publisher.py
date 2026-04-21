@@ -136,24 +136,39 @@ class GlossaryPublisher:
         suggestion: GlossarySuggestion,
         *,
         dataset_id: Optional[str] = None,
+        term_links: Optional[list[dict]] = None,
     ) -> dict:
-        """Create approved terms and entry links. Returns a structured report."""
+        """Create approved terms, column→term links, and term-to-term links.
+
+        ``term_links`` is an optional list of dicts shaped like
+        ``{"parent": <display>, "child": <display>, "kind":
+        "synonymous" | "related"}`` used to emit structured entry links
+        between two terms in this glossary (e.g. when the operator has
+        promoted a synonym into its own standalone term).
+
+        Returns a structured report.
+        """
         report: dict = {
             "created_terms": [],
             "skipped_terms": [],
             "mappings": [],
+            "term_links": [],
         }
 
         # 1) Ensure each referenced term exists.
         for term in suggestion.terms:
             self._ensure_term(term, report)
 
-        # 2) Create one EntryLink per mapping.
+        # 2) Create one EntryLink per column mapping.
         for mapping in suggestion.mappings:
             record = self._create_entry_link(
                 mapping, dataset_id=dataset_id or self._infer_dataset(mapping)
             )
             report["mappings"].append(record)
+
+        # 3) Create term-to-term entry links (synonymous / related).
+        for link in term_links or []:
+            report["term_links"].append(self._create_term_link(link))
 
         return report
 
@@ -247,6 +262,76 @@ class GlossaryPublisher:
             )
             payload["status"] = f"error: HTTP {resp.status_code}: {resp.text[:200]}"
         return payload
+
+    # ──────────────────────────────────────────────────── term-to-term links
+
+    def _create_term_link(self, link: dict) -> dict:
+        """Create a ``synonymous`` or ``related`` entry link between two terms.
+
+        Both endpoints are terms inside ``self.glossary_name`` (i.e. the
+        same glossary we just created them in). Dataplex requires the
+        parent of an EntryLink resource to be an EntryGroup; term entries
+        live in the system-managed ``@dataplex-glossary`` entry group at
+        the glossary's own location, so the link is written there.
+
+        ``link`` shape: ``{"parent": <display>, "child": <display>,
+        "kind": "synonymous" | "related"}``.
+        """
+        parent_display = link["parent"]
+        child_display = link["child"]
+        kind = link.get("kind", "related")
+        parent_resource = self._term_name(self._slug(parent_display))
+        child_resource = self._term_name(self._slug(child_display))
+        link_type = (
+            f"projects/dataplex-types/locations/global/entryLinkTypes/{kind}"
+        )
+        link_id = f"gg-{kind}-{uuid.uuid4().hex[:10]}"
+        entry_group = (
+            f"projects/{self.project_id}/locations/{self.location}"
+            f"/entryGroups/@dataplex-glossary"
+        )
+        entry_link_name = f"{entry_group}/entryLinks/{link_id}"
+
+        record = {
+            "kind": kind,
+            "parent": parent_display,
+            "child": child_display,
+            "entry_link": entry_link_name,
+            "dry_run": self.dry_run,
+        }
+
+        if self.dry_run:
+            record["status"] = "dry-run"
+            return record
+
+        url = f"{_DATAPLEX_REST}/{entry_group}/entryLinks"
+        body = {
+            "entryLinkType": link_type,
+            "entryReferences": [
+                {"name": parent_resource, "type": "SOURCE"},
+                {"name": child_resource, "type": "TARGET"},
+            ],
+        }
+        try:
+            resp = self._rest("POST", url, params={"entryLinkId": link_id}, json_body=body)
+        except requests.RequestException as exc:
+            logger.error("create_term_link network error %s: %s", record, exc)
+            record["status"] = f"error: {exc}"
+            return record
+
+        if resp.status_code in (200, 201):
+            record["status"] = "created"
+        elif resp.status_code == 409:
+            record["status"] = "exists"
+        else:
+            logger.error(
+                "create_term_link HTTP %d for %s: %s",
+                resp.status_code, record, resp.text[:300],
+            )
+            record["status"] = (
+                f"error: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        return record
 
     # ─────────────────────────────────────────────────────────────── helpers
 
