@@ -90,6 +90,18 @@
   </form>
 </section>
 
+<div id="loader" class="loader-overlay" hidden aria-live="polite" aria-busy="true">
+  <div class="loader-box">
+    <div class="spinner"></div>
+    <h3>Recommendation generation in progress</h3>
+    <p>
+      Collecting schema, detecting industry, and grounding against your
+      RAG corpus. This typically takes 20–60 seconds depending on
+      dataset size.
+    </p>
+  </div>
+</div>
+
 <script>
   const projectInput  = document.getElementById("project_id");
   const loadBtn       = document.getElementById("load-datasets");
@@ -182,6 +194,18 @@
       .forEach(cb => cb.checked = state);
     updateCount();
   }
+
+  // Show the loading overlay as soon as the form is submitted and keep
+  // the submit button from firing twice if the user double-clicks. The
+  // browser still navigates to /suggest; the overlay disappears with
+  // the page when the response loads.
+  const form   = document.getElementById("gen-form");
+  const loader = document.getElementById("loader");
+  form.addEventListener("submit", () => {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Generating…";
+    loader.hidden = false;
+  });
 
   // Auto-load datasets if the project id was pre-filled.
   if (projectInput.value.trim()) { loadDatasets(); }
