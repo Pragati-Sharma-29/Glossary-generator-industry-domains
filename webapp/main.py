@@ -323,8 +323,25 @@ async def suggest(
 ) -> HTMLResponse:
     sid = _get_or_create_session_id(session_id, response)
 
+    # Strip whitespace on every string the form collected — a stray
+    # trailing space on project_id hits BigQuery as projects/foo%20/...
+    # and comes back as an unhelpful 400 "Invalid resource name".
+    project_id = project_id.strip()
+    dataset_id = dataset_id.strip()
+    location = location.strip() or "europe-west4"
+    glossary_id = glossary_id.strip()
+    glossary_location = glossary_location.strip() or "global"
+
     form = await request.form()
-    table_allowlist = [v for v in form.getlist("tables") if v]
+    table_allowlist = [v.strip() for v in form.getlist("tables") if v.strip()]
+
+    if not project_id or not dataset_id:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"error": "Project id and dataset id are required."},
+            status_code=400,
+        )
 
     try:
         pdf_text = _extract_pdf_text(reference_pdf)
@@ -393,6 +410,10 @@ async def suggest(
             "location": location,
             "glossary_id": glossary_id,
             "glossary_location": glossary_location,
+            # BigQuery dataset region — used later as bq_region on the
+            # publisher so @bigquery entry-group URLs resolve against
+            # the dataset's own location, not the Vertex location.
+            "dataset_location": (result.get("dataset_location") or "us").lower(),
         },
         "dataset_id": dataset_id,
         "instructions": instructions,
@@ -455,7 +476,7 @@ async def publish(
 
     # Promoted synonyms / related terms become their own standalone
     # GlossaryTerms plus structured term-to-term entry links of type
-    # "synonymous" or "related". Dedupe against names we're already
+    # "synonym" or "related". Dedupe against names we're already
     # publishing so the API doesn't 409-loop if the user ticks the same
     # name twice or ticks something that's already a top-level term.
     existing_names = {t.display_name.lower() for t in approved_terms}
@@ -487,7 +508,11 @@ async def publish(
         project_id=cfg["project_id"],
         glossary_id=cfg["glossary_id"],
         location=cfg.get("glossary_location", "global"),
-        bq_region=cfg.get("location", "us-central1"),
+        # bq_region = the BigQuery dataset's own region (picked up by the
+        # agent via dataset.location). This is where @bigquery entries
+        # for that dataset's tables live; using the Vertex region instead
+        # was the cause of 400 "invalid entry reference" on publish.
+        bq_region=cfg.get("dataset_location") or "us",
         dry_run=False,
     )
     report = publisher.publish(
@@ -546,8 +571,9 @@ def _build_promoted_terms(
     the description as well and materialised as entry links so Dataplex
     carries structured relationships.
 
-    ``kind`` is ``"synonym"`` or ``"related"``; entry-link type is
-    ``"synonymous"`` / ``"related"`` accordingly.
+    ``kind`` is ``"synonym"`` or ``"related"``; that value is passed
+    through to the publisher unchanged and maps 1:1 to the Dataplex
+    system entry-link types ``/synonym`` and ``/related``.
     """
     seen: dict[str, dict] = {}  # name -> {parents: [...], description: "..."}
     for raw in values:
@@ -565,7 +591,9 @@ def _build_promoted_terms(
             slot["description"] = description
 
     prefix = "Synonym of" if kind == "synonym" else "Related to"
-    link_type = "synonymous" if kind == "synonym" else "related"
+    # Dataplex system entry-link types are named 'synonym' and 'related'
+    # (singular) — pass ``kind`` straight through as the link_type.
+    link_type = kind if kind in ("synonym", "related") else "related"
     for name, slot in seen.items():
         dedup_parents = list(dict.fromkeys(slot["parents"]))
         parent_ref = ", ".join(dedup_parents)

@@ -7,6 +7,137 @@ proposes business-glossary terms (with synonyms, related terms, and
 metrics) plus column mappings. Approved suggestions are written back to
 a Dataplex business glossary.
 
+## Getting started (first time, new project)
+
+For someone with a fresh GCP project and a BigQuery dataset they want
+to generate a glossary for. Cloud Shell is the fastest route — no
+local install, no SDK setup. ~20 minutes end-to-end the first time;
+under a minute on subsequent runs.
+
+### Prerequisites
+
+* A GCP project with **billing enabled**.
+* A BigQuery dataset loaded into that project (or plan to query one of
+  the `bigquery-public-data.*` datasets for a smoke test).
+* Your Google account signed in to that project with at least these
+  roles — ask your admin if you don't have them:
+  * `roles/bigquery.metadataViewer`
+  * `roles/dataplex.dataScanViewer`
+  * `roles/aiplatform.user`
+  * `roles/dataplex.glossaryEditor` *(only needed when you publish)*
+  * `roles/storage.admin` *(one-time, so the build script can create
+    a GCS bucket for RAG source files)*
+
+### Step 1 — Open Cloud Shell
+
+In the GCP Console, click the Cloud Shell icon (terminal icon, top
+right). A bash shell opens in your browser. All the commands below
+run there.
+
+Make sure your project is selected:
+
+```bash
+gcloud config set project MY_PROJECT_ID
+```
+
+### Step 2 — Clone the repo
+
+```bash
+git clone https://github.com/Pragati-Sharma-29/Glossary-generator-industry-domains.git
+cd Glossary-generator-industry-domains
+git checkout claude/glossary-generator-agent-Bkx9w
+```
+
+### Step 3 — Sign in with Application Default Credentials
+
+```bash
+unset GOOGLE_APPLICATION_CREDENTIALS
+gcloud auth application-default login
+# follow the browser prompt
+```
+
+This lets the agent call BigQuery, Dataplex, and Vertex AI as you.
+
+### Step 4 — Run the bootstrap script (one command)
+
+```bash
+./scripts/bootstrap.sh --project MY_PROJECT_ID --location europe-west4
+```
+
+This is idempotent — it checks what already exists and only does work
+that's missing. On a brand-new project it will:
+
+1. Enable the BigQuery, Dataplex, Vertex AI, and Storage APIs.
+2. `pip install -r requirements.txt`.
+3. Create a GCS bucket `MY_PROJECT_ID-rag-sources` for RAG source files.
+4. Build all **seven per-domain RAG corpora** (`industry-glossaries-<domain>`)
+   from the curated `seed_docs/*.md` files. Takes ~10–15 min on the
+   first run; later runs skip this entirely.
+5. Create the `enterprise-glossary` Dataplex glossary.
+6. Launch `uvicorn webapp:app` on port 8080.
+
+### Step 5 — Open the web app
+
+In the Cloud Shell toolbar (top right of the terminal panel) click the
+screen icon → **Preview on port 8080**. A tunneled `https://8080-cs-…cloudshell.dev`
+URL opens with the app.
+
+### Step 6 — Generate your first glossary
+
+1. **Project id** — type your project id → click **Load datasets**.
+2. **BigQuery dataset** — pick the dataset from the dropdown.
+3. **Tables to include** — leave all checked, or narrow to a few.
+4. **Instructions** *(optional)* — e.g. `"retail loyalty marts"`.
+5. **Reference PDF** *(optional)* — upload an internal glossary or spec
+   up to 10 MB if you have one.
+6. Click **Generate suggestions**. A loader overlay appears for 20–60 s.
+7. On the **Review page**:
+   * Confirm the detected industry card (expected domain should appear
+     with a confidence score and short reasoning).
+   * Expand each term to see proposed synonyms and related terms
+     (including metrics/KPIs) — tick any you want to promote into
+     standalone glossary terms.
+   * In the Column mappings table, tick the ones you want to publish
+     (defaults to all approved). Low-confidence rows are highlighted.
+8. Scroll to the bottom and click **Publish approved mappings**.
+
+### Step 7 — Verify in the Dataplex Catalog UI
+
+In the GCP Console, navigate to **Dataplex → Business glossaries**,
+open `enterprise-glossary`. You should see:
+* The approved terms, each with a definition (plus *"Also known as"* and
+  *"Related"* lines if synonyms/related were carried over).
+* Clicking a term shows the BigQuery columns linked to it via
+  `definition` entry links.
+* Promoted synonyms/related appear as their own terms in the same
+  glossary, linked back to the parent via `synonymous` / `related`
+  entry links.
+
+### Tips for better results
+
+* **Run a Dataplex DATA_PROFILE scan** on your tables before generating.
+  The agent uses the resulting statistics (null %, distinct %, top
+  values) as evidence — mapping confidence climbs noticeably with a
+  scan in place.
+* **Mention the industry in Instructions** if auto-detection misfires
+  on an unusual schema.
+* **Use the PDF upload** for company-specific vocabulary that isn't in
+  the seed docs (e.g. a proprietary CDM, a regulator's glossary) — its
+  text is folded into the prompt so definitions echo your terminology.
+
+### If something doesn't work
+
+| Symptom | Fix |
+|---|---|
+| "service account info is missing in the 'email' field" on **Load datasets** | `unset GOOGLE_APPLICATION_CREDENTIALS && gcloud auth application-default login`, then restart uvicorn. |
+| Detected industry card says "no per-domain corpus available" | One of the seven corpora failed to build. Re-run `./scripts/bootstrap.sh …`; it will build only the missing ones. |
+| Cloud Shell disconnects and the app dies | Re-run the bootstrap, or wrap the uvicorn launch in `tmux new -s app` so it survives disconnects. |
+| Publish shows "HTTP 403 permission denied" | You're missing `roles/dataplex.glossaryEditor` on the project. Ask your admin. |
+
+The deeper sections below cover the architecture, extension points,
+and alternative deployment shapes (shared hub project, centrally
+hosted service) once you're past the first run.
+
 ## Pipeline
 
 ```

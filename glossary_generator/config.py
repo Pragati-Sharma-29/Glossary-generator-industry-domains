@@ -45,6 +45,15 @@ class AgentConfig:
             "glossary_location": os.environ.get("DATAPLEX_GLOSSARY_LOCATION", "global"),
         }
         values.update({k: v for k, v in overrides.items() if v is not None})
+        # Defensive: every downstream GCP client call breaks on stray
+        # whitespace in resource-name fields — strip before handing off.
+        for k in (
+            "project_id", "location", "vertex_rag_corpus",
+            "dataplex_location", "glossary_id", "glossary_location",
+        ):
+            v = values.get(k)
+            if isinstance(v, str):
+                values[k] = v.strip()
         if not values["project_id"]:
             raise ValueError(
                 "project_id is required (set GOOGLE_CLOUD_PROJECT or pass explicitly)"
