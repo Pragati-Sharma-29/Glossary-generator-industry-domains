@@ -213,6 +213,12 @@ class GlossaryPublisher:
 
         url = f"{_DATAPLEX_REST}/{self.glossary_name}/terms"
         body = {
+            # Dataplex's GlossaryTerm proto declares `parent` as a
+            # required field on the resource itself, so the path-encoded
+            # parent isn't enough — it must also appear in the body or
+            # the API rejects the request with
+            # "Term.parent field should be of the format ...".
+            "parent": self.glossary_name,
             "displayName": term.display_name,
             "description": _term_description(term),
         }
