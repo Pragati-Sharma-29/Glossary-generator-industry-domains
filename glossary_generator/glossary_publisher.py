@@ -354,10 +354,36 @@ def _term_description(term: TermSuggestion) -> str:
     ``description`` fields — no dedicated synonym / related-term
     structures. To avoid losing that signal we append them to the
     description so they're visible in the Catalog UI and searchable.
+
+    ``synonyms`` / ``related_terms`` are ``list[dict]`` with
+    ``{"name": str, "description": str}`` shape (see TermSuggestion
+    docstring). We render just the names inline; any per-ref
+    descriptions the model supplied are available through the promoted-
+    term flow on the review page.
     """
     parts = [term.definition.strip()]
-    if term.synonyms:
-        parts.append("**Also known as:** " + ", ".join(term.synonyms))
-    if term.related_terms:
-        parts.append("**Related:** " + ", ".join(term.related_terms))
+    syn_names = _ref_names(term.synonyms)
+    if syn_names:
+        parts.append("**Also known as:** " + ", ".join(syn_names))
+    rel_names = _ref_names(term.related_terms)
+    if rel_names:
+        parts.append("**Related:** " + ", ".join(rel_names))
     return "\n\n".join(p for p in parts if p)
+
+
+def _ref_names(items) -> list[str]:
+    """Pull display names out of a synonym / related_term list.
+
+    Accepts either the new ``{"name": ..., "description": ...}`` dict
+    form or plain strings (legacy / test-harness input), never raises
+    on a malformed entry.
+    """
+    out: list[str] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            name = str(item.get("name", "")).strip()
+        else:
+            name = str(item).strip()
+        if name:
+            out.append(name)
+    return out
