@@ -323,8 +323,25 @@ async def suggest(
 ) -> HTMLResponse:
     sid = _get_or_create_session_id(session_id, response)
 
+    # Strip whitespace on every string the form collected — a stray
+    # trailing space on project_id hits BigQuery as projects/foo%20/...
+    # and comes back as an unhelpful 400 "Invalid resource name".
+    project_id = project_id.strip()
+    dataset_id = dataset_id.strip()
+    location = location.strip() or "europe-west4"
+    glossary_id = glossary_id.strip()
+    glossary_location = glossary_location.strip() or "global"
+
     form = await request.form()
-    table_allowlist = [v for v in form.getlist("tables") if v]
+    table_allowlist = [v.strip() for v in form.getlist("tables") if v.strip()]
+
+    if not project_id or not dataset_id:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"error": "Project id and dataset id are required."},
+            status_code=400,
+        )
 
     try:
         pdf_text = _extract_pdf_text(reference_pdf)
