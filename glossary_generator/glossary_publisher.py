@@ -24,7 +24,6 @@ import logging
 import re
 import uuid
 from typing import Any, Optional
-from urllib.parse import quote
 
 import google.auth
 import google.auth.transport.requests
@@ -34,10 +33,23 @@ from .models import ColumnMapping, GlossarySuggestion, TermSuggestion
 
 logger = logging.getLogger(__name__)
 
-# Standard entry link type used to associate a column with its business-glossary term.
+# Standard entry link types (see cloud.google.com/dataplex/docs/manage-glossaries).
 DEFINITION_ENTRY_LINK_TYPE = (
     "projects/dataplex-types/locations/global/entryLinkTypes/definition"
 )
+SYNONYM_ENTRY_LINK_TYPE = (
+    "projects/dataplex-types/locations/global/entryLinkTypes/synonym"
+)
+RELATED_ENTRY_LINK_TYPE = (
+    "projects/dataplex-types/locations/global/entryLinkTypes/related"
+)
+
+_TERM_LINK_TYPES = {
+    "synonym": SYNONYM_ENTRY_LINK_TYPE,
+    # Accept the adjective form the UI historically emitted.
+    "synonymous": SYNONYM_ENTRY_LINK_TYPE,
+    "related": RELATED_ENTRY_LINK_TYPE,
+}
 
 _DATAPLEX_REST = "https://dataplex.googleapis.com/v1"
 _AUTH_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
@@ -81,19 +93,37 @@ class GlossaryPublisher:
             f"/entryGroups/@bigquery"
         )
 
+    def _dataplex_entry_group(self) -> str:
+        """System entry group that owns glossary terms as Entries."""
+        return (
+            f"projects/{self.project_id}/locations/{self.location}"
+            f"/entryGroups/@dataplex"
+        )
+
     def _bigquery_column_entry(self, dataset_id: str, table_id: str) -> str:
         """Resource name of the BigQuery table entry.
 
         The column itself is referenced via the ``path`` field on the
-        ``EntryReference`` (``Schema.<column_name>``).
+        ``EntryReference`` (``Schema.<column_name>``). For Google Cloud
+        resources, Dataplex uses the full resource name minus the leading
+        ``//`` as the entry id, with literal slashes preserved in the
+        JSON body (URL-encoding is only required when embedding this id
+        in a URL path).
         """
-        # Dataplex stores a table's entry id as the URL-encoded
-        # ``//bigquery.googleapis.com/...`` full resource name.
-        bq_resource = (
-            f"//bigquery.googleapis.com/projects/{self.project_id}"
+        entry_id = (
+            f"bigquery.googleapis.com/projects/{self.project_id}"
             f"/datasets/{dataset_id}/tables/{table_id}"
         )
-        return f"{self._bigquery_entry_group()}/entries/{quote(bq_resource, safe='')}"
+        return f"{self._bigquery_entry_group()}/entries/{entry_id}"
+
+    def _term_entry(self, term_id: str) -> str:
+        """Resource name of a glossary term as an Entry under ``@dataplex``.
+
+        Dataplex exposes each GlossaryTerm as an Entry whose id is the
+        term's full resource name (literal slashes). Entry links must
+        reference terms via this Entry form, not the term resource name.
+        """
+        return f"{self._dataplex_entry_group()}/entries/{self._term_name(term_id)}"
 
     @staticmethod
     def _slug(display_name: str) -> str:
@@ -142,7 +172,7 @@ class GlossaryPublisher:
 
         ``term_links`` is an optional list of dicts shaped like
         ``{"parent": <display>, "child": <display>, "kind":
-        "synonymous" | "related"}`` used to emit structured entry links
+        "synonym" | "related"}`` used to emit structured entry links
         between two terms in this glossary (e.g. when the operator has
         promoted a synonym into its own standalone term).
 
@@ -211,14 +241,15 @@ class GlossaryPublisher:
     def _create_entry_link(
         self, mapping: ColumnMapping, *, dataset_id: str
     ) -> dict:
-        term_resource = self._term_name(self._slug(mapping.term_display_name))
+        term_id = self._slug(mapping.term_display_name)
+        term_entry = self._term_entry(term_id)
         column_entry = self._bigquery_column_entry(dataset_id, mapping.table_id)
         link_id = f"gg-{uuid.uuid4().hex[:12]}"
         parent = self._bigquery_entry_group()
         entry_link_name = f"{parent}/entryLinks/{link_id}"
 
         payload = {
-            "term": term_resource,
+            "term": self._term_name(term_id),
             "table": f"{dataset_id}.{mapping.table_id}",
             "column": mapping.column_name,
             "entry_link": entry_link_name,
@@ -241,7 +272,7 @@ class GlossaryPublisher:
                     "type": "SOURCE",
                     "path": f"Schema.{mapping.column_name}",
                 },
-                {"name": term_resource, "type": "TARGET"},
+                {"name": term_entry, "type": "TARGET"},
             ],
         }
         try:
@@ -266,30 +297,35 @@ class GlossaryPublisher:
     # ──────────────────────────────────────────────────── term-to-term links
 
     def _create_term_link(self, link: dict) -> dict:
-        """Create a ``synonymous`` or ``related`` entry link between two terms.
+        """Create a ``synonym`` or ``related`` entry link between two terms.
 
-        Both endpoints are terms inside ``self.glossary_name`` (i.e. the
-        same glossary we just created them in). Dataplex requires the
-        parent of an EntryLink resource to be an EntryGroup; term entries
-        live in the system-managed ``@dataplex-glossary`` entry group at
-        the glossary's own location, so the link is written there.
+        Both endpoints are terms inside ``self.glossary_name``. Dataplex
+        exposes each term as an Entry under the system-managed
+        ``@dataplex`` entry group at the glossary's location, and entry
+        links between terms are also created under that same group. Both
+        relations are non-directional, so each EntryReference carries
+        ``type: UNSPECIFIED`` per the Dataplex proto.
 
         ``link`` shape: ``{"parent": <display>, "child": <display>,
-        "kind": "synonymous" | "related"}``.
+        "kind": "synonym" | "related"}`` (``synonymous`` is accepted as
+        an alias for ``synonym``).
         """
         parent_display = link["parent"]
         child_display = link["child"]
-        kind = link.get("kind", "related")
-        parent_resource = self._term_name(self._slug(parent_display))
-        child_resource = self._term_name(self._slug(child_display))
-        link_type = (
-            f"projects/dataplex-types/locations/global/entryLinkTypes/{kind}"
-        )
+        raw_kind = link.get("kind", "related")
+        link_type = _TERM_LINK_TYPES.get(raw_kind)
+        if link_type is None:
+            return {
+                "kind": raw_kind,
+                "parent": parent_display,
+                "child": child_display,
+                "status": f"error: unsupported term link kind {raw_kind!r}",
+            }
+        kind = "synonym" if link_type == SYNONYM_ENTRY_LINK_TYPE else "related"
+        parent_entry = self._term_entry(self._slug(parent_display))
+        child_entry = self._term_entry(self._slug(child_display))
         link_id = f"gg-{kind}-{uuid.uuid4().hex[:10]}"
-        entry_group = (
-            f"projects/{self.project_id}/locations/{self.location}"
-            f"/entryGroups/@dataplex-glossary"
-        )
+        entry_group = self._dataplex_entry_group()
         entry_link_name = f"{entry_group}/entryLinks/{link_id}"
 
         record = {
@@ -308,8 +344,8 @@ class GlossaryPublisher:
         body = {
             "entryLinkType": link_type,
             "entryReferences": [
-                {"name": parent_resource, "type": "SOURCE"},
-                {"name": child_resource, "type": "TARGET"},
+                {"name": parent_entry, "type": "UNSPECIFIED"},
+                {"name": child_entry, "type": "UNSPECIFIED"},
             ],
         }
         try:

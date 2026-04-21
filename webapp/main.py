@@ -546,8 +546,8 @@ def _build_promoted_terms(
     the description as well and materialised as entry links so Dataplex
     carries structured relationships.
 
-    ``kind`` is ``"synonym"`` or ``"related"``; entry-link type is
-    ``"synonymous"`` / ``"related"`` accordingly.
+    ``kind`` is ``"synonym"`` or ``"related"`` and is passed straight
+    through to the publisher as the entry-link kind.
     """
     seen: dict[str, dict] = {}  # name -> {parents: [...], description: "..."}
     for raw in values:
@@ -565,7 +565,6 @@ def _build_promoted_terms(
             slot["description"] = description
 
     prefix = "Synonym of" if kind == "synonym" else "Related to"
-    link_type = "synonymous" if kind == "synonym" else "related"
     for name, slot in seen.items():
         dedup_parents = list(dict.fromkeys(slot["parents"]))
         parent_ref = ", ".join(dedup_parents)
@@ -581,7 +580,7 @@ def _build_promoted_terms(
             related_terms=[{"name": p, "description": ""} for p in dedup_parents],
         )
         links = [
-            {"parent": parent, "child": name, "kind": link_type}
+            {"parent": parent, "child": name, "kind": kind}
             for parent in dedup_parents
         ]
         yield term, links
