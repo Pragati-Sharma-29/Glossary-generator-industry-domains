@@ -20,6 +20,7 @@ Set ``dry_run=True`` to preview without writing anything.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
@@ -394,9 +395,16 @@ class GlossaryPublisher:
     def _create_entry_link(
         self, mapping: ColumnMapping, *, dataset_id: str
     ) -> dict:
-        term_resource = self._term_name(self._slug(mapping.term_display_name))
+        term_slug = self._slug(mapping.term_display_name)
+        term_resource = self._term_name(term_slug)
         column_entry = self._bigquery_column_entry(dataset_id, mapping.table_id)
-        link_id = f"gg-{uuid.uuid4().hex[:12]}"
+        # Deterministic id so re-publishing the same (term, table, column)
+        # triple produces the same link id → Dataplex 409 → we mark
+        # "exists" and skip, rather than minting a fresh UUID each run
+        # and accumulating duplicate links.
+        link_id = _deterministic_link_id(
+            "def", term_slug, dataset_id, mapping.table_id, mapping.column_name,
+        )
         parent = self._bigquery_entry_group()
         entry_link_name = f"{parent}/entryLinks/{link_id}"
 
@@ -477,12 +485,17 @@ class GlossaryPublisher:
         parent_display = link["parent"]
         child_display = link["child"]
         kind = link.get("kind", "related")
-        parent_resource = self._term_name(self._slug(parent_display))
-        child_resource = self._term_name(self._slug(child_display))
+        parent_slug = self._slug(parent_display)
+        child_slug = self._slug(child_display)
+        parent_resource = self._term_name(parent_slug)
+        child_resource = self._term_name(child_slug)
         link_type = (
             f"projects/dataplex-types/locations/global/entryLinkTypes/{kind}"
         )
-        link_id = f"gg-{kind}-{uuid.uuid4().hex[:10]}"
+        # Deterministic id so a re-publish with the same (kind, parent,
+        # child) triple hits Dataplex 409 → "exists" rather than creating
+        # a duplicate link every time.
+        link_id = _deterministic_link_id(kind, parent_slug, child_slug)
         entry_group = (
             f"projects/{self.project_id}/locations/{self.location}"
             f"/entryGroups/@dataplex-glossary"
@@ -584,3 +597,23 @@ def _ref_names(items) -> list[str]:
         if name:
             out.append(name)
     return out
+
+
+def _deterministic_link_id(kind: str, *parts: str) -> str:
+    """Stable entry-link id derived from its semantic content.
+
+    Dataplex EntryLink ids are the primary key; two POSTs with the same
+    id on the same entry group collide with HTTP 409, which our publish
+    path already interprets as "exists" and skips. By deriving the id
+    from a hash of the link's kind + ordered parts (term slug, dataset,
+    table, column — or kind + parent + child for term-to-term), we get
+    idempotent re-publishes without having to GET-then-POST.
+
+    The sha1 is truncated to 16 hex chars; the ``{prefix}-{hash}``
+    layout stays under Dataplex's entry-link id length limit.
+    """
+    prefix_map = {"def": "def", "synonymous": "syn", "related": "rel"}
+    prefix = prefix_map.get(kind, "gg")
+    payload = "|".join([kind, *parts]).encode("utf-8")
+    digest = hashlib.sha1(payload).hexdigest()[:16]
+    return f"{prefix}-{digest}"
