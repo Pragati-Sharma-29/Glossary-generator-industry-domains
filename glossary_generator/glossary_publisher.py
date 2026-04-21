@@ -202,13 +202,31 @@ class GlossaryPublisher:
             report["created_terms"].append({"name": full_name})
         elif resp.status_code == 409:
             report["skipped_terms"].append({"name": full_name, "reason": "exists"})
+        elif resp.status_code == 404:
+            logger.error(
+                "create_glossary_term 404 for %s (URL=%s): %s",
+                full_name, url, resp.text[:500],
+            )
+            report["skipped_terms"].append({
+                "name": full_name,
+                "reason": (
+                    f"HTTP 404 — glossary '{self.glossary_id}' not found at "
+                    f"location '{self.location}'. Verify with:\n"
+                    f"  gcloud dataplex glossaries describe {self.glossary_id} "
+                    f"--project {self.project_id} --location {self.location}\n"
+                    "If the glossary lives in another location, update the "
+                    "'Glossary location' field under Advanced on the home "
+                    "page. Raw Dataplex error: "
+                    f"{resp.text[:200]}"
+                ),
+            })
         else:
             logger.error(
-                "create_glossary_term HTTP %d for %s: %s",
-                resp.status_code, full_name, resp.text[:300],
+                "create_glossary_term HTTP %d for %s (URL=%s): %s",
+                resp.status_code, full_name, url, resp.text[:500],
             )
             report["skipped_terms"].append(
-                {"name": full_name, "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+                {"name": full_name, "reason": f"HTTP {resp.status_code}: {resp.text[:300]}"}
             )
 
     # ──────────────────────────────────────────────────── entry link creation
@@ -260,12 +278,26 @@ class GlossaryPublisher:
             payload["status"] = "created"
         elif resp.status_code == 409:
             payload["status"] = "exists"
+        elif resp.status_code == 400 and "entry reference" in resp.text.lower():
+            logger.error(
+                "create_entry_link 400 for %s (URL=%s, body=%s): %s",
+                payload, url, body, resp.text[:500],
+            )
+            payload["status"] = (
+                f"HTTP 400 — Dataplex rejected the EntryReference. The most "
+                f"common cause is the BigQuery table '{dataset_id}.{mapping.table_id}' "
+                f"not yet being present in the @bigquery entry group at "
+                f"{self.bq_region}. Dataplex auto-discovery usually populates "
+                f"it within minutes of a scan; run a DATA_PROFILE scan on the "
+                f"table first, wait a few minutes, then retry. Raw: "
+                f"{resp.text[:250]}"
+            )
         else:
             logger.error(
-                "create_entry_link HTTP %d for %s: %s",
-                resp.status_code, payload, resp.text[:300],
+                "create_entry_link HTTP %d for %s (URL=%s, body=%s): %s",
+                resp.status_code, payload, url, body, resp.text[:500],
             )
-            payload["status"] = f"error: HTTP {resp.status_code}: {resp.text[:200]}"
+            payload["status"] = f"error: HTTP {resp.status_code}: {resp.text[:300]}"
         return payload
 
     # ──────────────────────────────────────────────────── term-to-term links
