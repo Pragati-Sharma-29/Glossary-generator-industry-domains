@@ -170,6 +170,25 @@ def _friendlier_bq_error(exc: Exception, project_id: str) -> str:
             "environment with ADC set up."
         )
 
+    # Malformed service-account JSON (empty / wrong-type ADC file, or a stray
+    # GOOGLE_APPLICATION_CREDENTIALS env var pointing to something bogus).
+    if (
+        "service account info" in msg.lower()
+        or "was not in the expected format" in msg
+        or "is missing" in msg.lower()
+        and "email" in msg.lower()
+    ):
+        return (
+            "ADC loaded a credentials file but it isn't a valid "
+            "service-account key (missing required fields). On Cloud Shell, "
+            "run:\n"
+            "  unset GOOGLE_APPLICATION_CREDENTIALS\n"
+            "  gcloud auth application-default login\n"
+            "then restart uvicorn. If you intended to use a service account, "
+            "check that $GOOGLE_APPLICATION_CREDENTIALS points at a real key "
+            "JSON from IAM → Service Accounts → Keys."
+        )
+
     # Project doesn't exist OR caller doesn't have access to it
     if "404" in msg or "NotFound" in cls:
         return (
