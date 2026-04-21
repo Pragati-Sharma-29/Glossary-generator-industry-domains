@@ -183,6 +183,11 @@ class GlossaryPublisher:
 
         url = f"{_DATAPLEX_REST}/{self.glossary_name}/terms"
         body = {
+            # Dataplex uniquely requires the parent glossary resource name
+            # echoed in the body even though it's already in the URL path.
+            # Without it the API rejects the create with HTTP 400
+            # "'Term.parent' field should be of the format …".
+            "parent": self.glossary_name,
             "displayName": term.display_name,
             "description": _term_description(term),
         }
