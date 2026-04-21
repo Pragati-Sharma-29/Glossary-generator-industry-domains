@@ -476,7 +476,7 @@ async def publish(
 
     # Promoted synonyms / related terms become their own standalone
     # GlossaryTerms plus structured term-to-term entry links of type
-    # "synonymous" or "related". Dedupe against names we're already
+    # "synonym" or "related". Dedupe against names we're already
     # publishing so the API doesn't 409-loop if the user ticks the same
     # name twice or ticks something that's already a top-level term.
     existing_names = {t.display_name.lower() for t in approved_terms}
@@ -571,8 +571,9 @@ def _build_promoted_terms(
     the description as well and materialised as entry links so Dataplex
     carries structured relationships.
 
-    ``kind`` is ``"synonym"`` or ``"related"``; entry-link type is
-    ``"synonymous"`` / ``"related"`` accordingly.
+    ``kind`` is ``"synonym"`` or ``"related"``; that value is passed
+    through to the publisher unchanged and maps 1:1 to the Dataplex
+    system entry-link types ``/synonym`` and ``/related``.
     """
     seen: dict[str, dict] = {}  # name -> {parents: [...], description: "..."}
     for raw in values:
@@ -590,7 +591,9 @@ def _build_promoted_terms(
             slot["description"] = description
 
     prefix = "Synonym of" if kind == "synonym" else "Related to"
-    link_type = "synonymous" if kind == "synonym" else "related"
+    # Dataplex system entry-link types are named 'synonym' and 'related'
+    # (singular) — pass ``kind`` straight through as the link_type.
+    link_type = kind if kind in ("synonym", "related") else "related"
     for name, slot in seen.items():
         dedup_parents = list(dict.fromkeys(slot["parents"]))
         parent_ref = ", ".join(dedup_parents)

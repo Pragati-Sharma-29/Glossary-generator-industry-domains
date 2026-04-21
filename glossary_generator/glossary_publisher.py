@@ -511,20 +511,19 @@ class GlossaryPublisher:
         parent_resource = self._term_entry_name(parent_slug)
         child_resource = self._term_entry_name(child_slug)
 
-        # Dataplex publishes only two system entry link types for glossary
-        # relationships: ``definition`` (directed, column→term) and
-        # ``related`` (undirected, term↔term). There is no
-        # ``synonymous`` type — requests to it return 403 "or it may not
-        # exist". Map both promoted kinds onto ``related`` here; the
-        # synonym-vs-related distinction lives on in each term's
-        # description ("Synonym of …" / "Related to …").
+        # Dataplex publishes two standard system entry link types for
+        # glossary relationships: ``synonym`` and ``related`` (both
+        # undirected, term↔term). ``kind`` on the link request is
+        # either "synonym" or "related"; map it straight through.
+        # Anything else falls back to ``related``.
+        safe_kind = kind if kind in ("synonym", "related") else "related"
         link_type = (
-            f"projects/dataplex-types/locations/global/entryLinkTypes/related"
+            f"projects/dataplex-types/locations/global/entryLinkTypes/{safe_kind}"
         )
         # Deterministic id so a re-publish with the same (kind, parent,
         # child) triple hits Dataplex 409 → "exists" rather than creating
         # a duplicate link every time.
-        link_id = _deterministic_link_id(kind, parent_slug, child_slug)
+        link_id = _deterministic_link_id(safe_kind, parent_slug, child_slug)
         entry_group = (
             f"projects/{self.project_id}/locations/{self.location}"
             f"/entryGroups/@dataplex-glossary"
@@ -647,7 +646,7 @@ def _deterministic_link_id(kind: str, *parts: str) -> str:
     The sha1 is truncated to 16 hex chars; the ``{prefix}-{hash}``
     layout stays under Dataplex's entry-link id length limit.
     """
-    prefix_map = {"def": "def", "synonymous": "syn", "related": "rel"}
+    prefix_map = {"def": "def", "synonym": "syn", "related": "rel"}
     prefix = prefix_map.get(kind, "gg")
     payload = "|".join([kind, *parts]).encode("utf-8")
     digest = hashlib.sha1(payload).hexdigest()[:16]
