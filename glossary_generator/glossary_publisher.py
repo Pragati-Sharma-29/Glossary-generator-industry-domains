@@ -9,10 +9,12 @@ Writes two kinds of resources
    created under
    ``projects/{p}/locations/{region}/entryGroups/@bigquery/entryLinks/{id}``.
 
-Dataplex (Universal Catalog) exposes these via ``dataplex_v1.CatalogServiceClient``.
-Field and method names on that client have evolved across releases of
-``google-cloud-dataplex``; the code below is defensive — if a method is
-missing, it records the intended payload in the report instead of aborting.
+Dataplex (Universal Catalog) exposes these via the ``dataplex_v1``
+SDK client, but ``create_glossary_term`` / ``create_entry_link`` are not
+yet shipped in every release of ``google-cloud-dataplex``. To stay
+version-independent we call the Dataplex **REST API** directly using
+ADC for auth — the REST surface is stable across SDK versions and its
+request shape matches the proto one-for-one.
 
 Set ``dry_run=True`` to preview without writing anything.
 """
@@ -24,8 +26,9 @@ import uuid
 from typing import Any, Optional
 from urllib.parse import quote
 
-from google.api_core.exceptions import AlreadyExists, GoogleAPICallError
-from google.cloud import dataplex_v1
+import google.auth
+import google.auth.transport.requests
+import requests
 
 from .models import ColumnMapping, GlossarySuggestion, TermSuggestion
 
@@ -35,6 +38,9 @@ logger = logging.getLogger(__name__)
 DEFINITION_ENTRY_LINK_TYPE = (
     "projects/dataplex-types/locations/global/entryLinkTypes/definition"
 )
+
+_DATAPLEX_REST = "https://dataplex.googleapis.com/v1"
+_AUTH_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
 
 class GlossaryPublisher:
@@ -46,14 +52,16 @@ class GlossaryPublisher:
         *,
         bq_region: str = "us",
         dry_run: bool = True,
-        client: Optional[Any] = None,
+        client: Optional[Any] = None,  # kept for test injection / future use
     ):
         self.project_id = project_id
         self.glossary_id = glossary_id
         self.location = location
         self.bq_region = bq_region
         self.dry_run = dry_run
-        self._client = client or dataplex_v1.CatalogServiceClient()
+        self._client = client  # unused; Dataplex calls go through REST
+        self._creds = None
+        self._session = requests.Session()
 
     # ─────────────────────────────────────────────────────────── resource names
 
@@ -92,6 +100,35 @@ class GlossaryPublisher:
         cleaned = re.sub(r"[^a-z0-9\-]+", "-", display_name.strip().lower())
         return cleaned.strip("-")[:63] or "term"
 
+    # ─────────────────────────────────────────────────────────── auth / REST
+
+    def _access_token(self) -> str:
+        if self._creds is None:
+            self._creds, _ = google.auth.default(scopes=_AUTH_SCOPES)
+        if not self._creds.valid:
+            self._creds.refresh(google.auth.transport.requests.Request())
+        return self._creds.token
+
+    def _rest(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Optional[dict] = None,
+        json_body: Optional[dict] = None,
+    ) -> requests.Response:
+        return self._session.request(
+            method,
+            url,
+            params=params,
+            json=json_body,
+            headers={
+                "Authorization": f"Bearer {self._access_token()}",
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+
     # ────────────────────────────────────────────────────────────────── public
 
     def publish(
@@ -99,24 +136,39 @@ class GlossaryPublisher:
         suggestion: GlossarySuggestion,
         *,
         dataset_id: Optional[str] = None,
+        term_links: Optional[list[dict]] = None,
     ) -> dict:
-        """Create approved terms and entry links. Returns a structured report."""
+        """Create approved terms, column→term links, and term-to-term links.
+
+        ``term_links`` is an optional list of dicts shaped like
+        ``{"parent": <display>, "child": <display>, "kind":
+        "synonymous" | "related"}`` used to emit structured entry links
+        between two terms in this glossary (e.g. when the operator has
+        promoted a synonym into its own standalone term).
+
+        Returns a structured report.
+        """
         report: dict = {
             "created_terms": [],
             "skipped_terms": [],
             "mappings": [],
+            "term_links": [],
         }
 
         # 1) Ensure each referenced term exists.
         for term in suggestion.terms:
             self._ensure_term(term, report)
 
-        # 2) Create one EntryLink per mapping.
+        # 2) Create one EntryLink per column mapping.
         for mapping in suggestion.mappings:
             record = self._create_entry_link(
                 mapping, dataset_id=dataset_id or self._infer_dataset(mapping)
             )
             report["mappings"].append(record)
+
+        # 3) Create term-to-term entry links (synonymous / related).
+        for link in term_links or []:
+            report["term_links"].append(self._create_term_link(link))
 
         return report
 
@@ -129,32 +181,30 @@ class GlossaryPublisher:
             report["created_terms"].append({"name": full_name, "dry_run": True})
             return
 
-        create_fn = getattr(self._client, "create_glossary_term", None)
-        request_cls = getattr(dataplex_v1, "CreateGlossaryTermRequest", None)
-        term_cls = getattr(dataplex_v1, "GlossaryTerm", None)
-        if not (create_fn and request_cls and term_cls):
-            report["skipped_terms"].append(
-                {"name": full_name, "reason": "dataplex SDK lacks create_glossary_term"}
-            )
+        url = f"{_DATAPLEX_REST}/{self.glossary_name}/terms"
+        body = {
+            "displayName": term.display_name,
+            "description": _term_description(term),
+        }
+        try:
+            resp = self._rest("POST", url, params={"termId": term_id}, json_body=body)
+        except requests.RequestException as exc:
+            logger.error("create_glossary_term network error for %s: %s", full_name, exc)
+            report["skipped_terms"].append({"name": full_name, "reason": str(exc)})
             return
 
-        try:
-            create_fn(
-                request=request_cls(
-                    parent=self.glossary_name,
-                    term_id=term_id,
-                    glossary_term=term_cls(
-                        display_name=term.display_name,
-                        description=term.definition,
-                    ),
-                )
-            )
+        if resp.status_code in (200, 201):
             report["created_terms"].append({"name": full_name})
-        except AlreadyExists:
+        elif resp.status_code == 409:
             report["skipped_terms"].append({"name": full_name, "reason": "exists"})
-        except GoogleAPICallError as exc:
-            logger.error("Failed to create term %s: %s", full_name, exc)
-            report["skipped_terms"].append({"name": full_name, "reason": str(exc)})
+        else:
+            logger.error(
+                "create_glossary_term HTTP %d for %s: %s",
+                resp.status_code, full_name, resp.text[:300],
+            )
+            report["skipped_terms"].append(
+                {"name": full_name, "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+            )
 
     # ──────────────────────────────────────────────────── entry link creation
 
@@ -182,40 +232,106 @@ class GlossaryPublisher:
             payload["status"] = "dry-run"
             return payload
 
-        create_fn = getattr(self._client, "create_entry_link", None)
-        request_cls = getattr(dataplex_v1, "CreateEntryLinkRequest", None)
-        link_cls = getattr(dataplex_v1, "EntryLink", None)
-        ref_cls = getattr(dataplex_v1, "EntryReference", None)
-        if not (create_fn and request_cls and link_cls and ref_cls):
-            payload["status"] = "skipped: SDK lacks create_entry_link"
+        url = f"{_DATAPLEX_REST}/{parent}/entryLinks"
+        body = {
+            "entryLinkType": DEFINITION_ENTRY_LINK_TYPE,
+            "entryReferences": [
+                {
+                    "name": column_entry,
+                    "type": "SOURCE",
+                    "path": f"Schema.{mapping.column_name}",
+                },
+                {"name": term_resource, "type": "TARGET"},
+            ],
+        }
+        try:
+            resp = self._rest("POST", url, params={"entryLinkId": link_id}, json_body=body)
+        except requests.RequestException as exc:
+            logger.error("create_entry_link network error for %s: %s", payload, exc)
+            payload["status"] = f"error: {exc}"
             return payload
 
-        try:
-            entry_link = link_cls(
-                entry_link_type=DEFINITION_ENTRY_LINK_TYPE,
-                entry_references=[
-                    ref_cls(
-                        name=column_entry,
-                        type_=ref_cls.Type.SOURCE,
-                        path=f"Schema.{mapping.column_name}",
-                    ),
-                    ref_cls(name=term_resource, type_=ref_cls.Type.TARGET),
-                ],
-            )
-            create_fn(
-                request=request_cls(
-                    parent=parent,
-                    entry_link_id=link_id,
-                    entry_link=entry_link,
-                )
-            )
+        if resp.status_code in (200, 201):
             payload["status"] = "created"
-        except AlreadyExists:
+        elif resp.status_code == 409:
             payload["status"] = "exists"
-        except GoogleAPICallError as exc:
-            logger.error("create_entry_link failed for %s: %s", payload, exc)
-            payload["status"] = f"error: {exc}"
+        else:
+            logger.error(
+                "create_entry_link HTTP %d for %s: %s",
+                resp.status_code, payload, resp.text[:300],
+            )
+            payload["status"] = f"error: HTTP {resp.status_code}: {resp.text[:200]}"
         return payload
+
+    # ──────────────────────────────────────────────────── term-to-term links
+
+    def _create_term_link(self, link: dict) -> dict:
+        """Create a ``synonymous`` or ``related`` entry link between two terms.
+
+        Both endpoints are terms inside ``self.glossary_name`` (i.e. the
+        same glossary we just created them in). Dataplex requires the
+        parent of an EntryLink resource to be an EntryGroup; term entries
+        live in the system-managed ``@dataplex-glossary`` entry group at
+        the glossary's own location, so the link is written there.
+
+        ``link`` shape: ``{"parent": <display>, "child": <display>,
+        "kind": "synonymous" | "related"}``.
+        """
+        parent_display = link["parent"]
+        child_display = link["child"]
+        kind = link.get("kind", "related")
+        parent_resource = self._term_name(self._slug(parent_display))
+        child_resource = self._term_name(self._slug(child_display))
+        link_type = (
+            f"projects/dataplex-types/locations/global/entryLinkTypes/{kind}"
+        )
+        link_id = f"gg-{kind}-{uuid.uuid4().hex[:10]}"
+        entry_group = (
+            f"projects/{self.project_id}/locations/{self.location}"
+            f"/entryGroups/@dataplex-glossary"
+        )
+        entry_link_name = f"{entry_group}/entryLinks/{link_id}"
+
+        record = {
+            "kind": kind,
+            "parent": parent_display,
+            "child": child_display,
+            "entry_link": entry_link_name,
+            "dry_run": self.dry_run,
+        }
+
+        if self.dry_run:
+            record["status"] = "dry-run"
+            return record
+
+        url = f"{_DATAPLEX_REST}/{entry_group}/entryLinks"
+        body = {
+            "entryLinkType": link_type,
+            "entryReferences": [
+                {"name": parent_resource, "type": "SOURCE"},
+                {"name": child_resource, "type": "TARGET"},
+            ],
+        }
+        try:
+            resp = self._rest("POST", url, params={"entryLinkId": link_id}, json_body=body)
+        except requests.RequestException as exc:
+            logger.error("create_term_link network error %s: %s", record, exc)
+            record["status"] = f"error: {exc}"
+            return record
+
+        if resp.status_code in (200, 201):
+            record["status"] = "created"
+        elif resp.status_code == 409:
+            record["status"] = "exists"
+        else:
+            logger.error(
+                "create_term_link HTTP %d for %s: %s",
+                resp.status_code, record, resp.text[:300],
+            )
+            record["status"] = (
+                f"error: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        return record
 
     # ─────────────────────────────────────────────────────────────── helpers
 
@@ -229,3 +345,19 @@ class GlossaryPublisher:
         if "." in mapping.table_id:
             return mapping.table_id.split(".", 1)[0]
         return ""
+
+
+def _term_description(term: TermSuggestion) -> str:
+    """Render a TermSuggestion into a Dataplex term description.
+
+    Dataplex's GlossaryTerm proto only carries ``displayName`` and
+    ``description`` fields — no dedicated synonym / related-term
+    structures. To avoid losing that signal we append them to the
+    description so they're visible in the Catalog UI and searchable.
+    """
+    parts = [term.definition.strip()]
+    if term.synonyms:
+        parts.append("**Also known as:** " + ", ".join(term.synonyms))
+    if term.related_terms:
+        parts.append("**Related:** " + ", ".join(term.related_terms))
+    return "\n\n".join(p for p in parts if p)

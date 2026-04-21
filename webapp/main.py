@@ -152,6 +152,78 @@ def _extract_pdf_text(upload: Optional[UploadFile]) -> str:
     return text
 
 
+def _friendlier_bq_error(exc: Exception, project_id: str) -> str:
+    """Translate common BigQuery client errors into a useful short message.
+
+    Anything that doesn't match a known pattern is returned verbatim so
+    the raw SDK message still reaches the browser — never swallow the
+    underlying cause.
+    """
+    msg = str(exc)
+    cls = type(exc).__name__
+
+    # Caller not authenticated or ADC missing
+    if "DefaultCredentialsError" in cls or "Could not automatically determine credentials" in msg:
+        return (
+            "No Application Default Credentials found. On Cloud Shell, run "
+            "`gcloud auth application-default login` or redeploy in an "
+            "environment with ADC set up."
+        )
+
+    # Malformed service-account JSON (empty / wrong-type ADC file, or a stray
+    # GOOGLE_APPLICATION_CREDENTIALS env var pointing to something bogus).
+    if (
+        "service account info" in msg.lower()
+        or "was not in the expected format" in msg
+        or "is missing" in msg.lower()
+        and "email" in msg.lower()
+    ):
+        return (
+            "ADC loaded a credentials file but it isn't a valid "
+            "service-account key (missing required fields). On Cloud Shell, "
+            "run:\n"
+            "  unset GOOGLE_APPLICATION_CREDENTIALS\n"
+            "  gcloud auth application-default login\n"
+            "then restart uvicorn. If you intended to use a service account, "
+            "check that $GOOGLE_APPLICATION_CREDENTIALS points at a real key "
+            "JSON from IAM → Service Accounts → Keys."
+        )
+
+    # Project doesn't exist OR caller doesn't have access to it
+    if "404" in msg or "NotFound" in cls:
+        return (
+            f"BigQuery did not find project '{project_id}'. Double-check the "
+            "id (not the project *name* or number), and confirm the signed-in "
+            "account has access to it."
+        )
+
+    # IAM / permission
+    if "403" in msg or "Forbidden" in cls or "permission" in msg.lower():
+        return (
+            f"The signed-in account can list the project '{project_id}' but "
+            "lacks `bigquery.datasets.list` permission on it. Grant "
+            "roles/bigquery.metadataViewer (or higher) and retry."
+        )
+
+    # API not enabled
+    if "has not been used" in msg or "is disabled" in msg:
+        return (
+            f"The BigQuery API is not enabled on project '{project_id}'. "
+            "Enable it: `gcloud services enable bigquery.googleapis.com "
+            f"--project {project_id}`"
+        )
+
+    # Billing
+    if "billing" in msg.lower():
+        return (
+            f"Project '{project_id}' has no active billing account, which "
+            "BigQuery requires for metadata listing. Link a billing account "
+            "in the Cloud Console and retry."
+        )
+
+    return f"{cls}: {msg}"
+
+
 def _get_or_create_session_id(session_id: Optional[str], response: Response) -> str:
     if session_id and session_id in _SESSIONS:
         return session_id
@@ -170,6 +242,11 @@ def _get_or_create_session_id(session_id: Optional[str], response: Response) -> 
 @app.get("/api/datasets")
 def api_datasets(project_id: str) -> JSONResponse:
     """List BigQuery datasets visible in a project."""
+    project_id = project_id.strip()
+    if not project_id:
+        return JSONResponse(
+            {"error": "Project id is required."}, status_code=400
+        )
     try:
         client = bigquery.Client(project=project_id)
         datasets = [
@@ -182,13 +259,22 @@ def api_datasets(project_id: str) -> JSONResponse:
         ]
     except Exception as exc:  # noqa: BLE001
         logger.exception("list_datasets failed for %s", project_id)
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(
+            {"error": _friendlier_bq_error(exc, project_id)}, status_code=400
+        )
     return JSONResponse({"datasets": datasets})
 
 
 @app.get("/api/tables")
 def api_tables(project_id: str, dataset_id: str) -> JSONResponse:
     """List tables in a dataset. ``dataset_id`` may be ``project.dataset``."""
+    project_id = project_id.strip()
+    dataset_id = dataset_id.strip()
+    if not project_id or not dataset_id:
+        return JSONResponse(
+            {"error": "Project id and dataset id are required."},
+            status_code=400,
+        )
     try:
         client = bigquery.Client(project=project_id)
         ref = dataset_id if "." in dataset_id else f"{project_id}.{dataset_id}"
@@ -198,7 +284,10 @@ def api_tables(project_id: str, dataset_id: str) -> JSONResponse:
         ]
     except Exception as exc:  # noqa: BLE001
         logger.exception("list_tables failed for %s / %s", project_id, dataset_id)
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(
+            {"error": _friendlier_bq_error(exc, project_id)},
+            status_code=400,
+        )
     return JSONResponse({"tables": tables})
 
 
@@ -340,6 +429,8 @@ async def publish(
 
     form = await request.form()
     approved_ids = set(form.getlist("approved_mapping"))
+    promoted_synonyms = form.getlist("promote_synonym")
+    promoted_related = form.getlist("promote_related")
 
     session = _SESSIONS[session_id]
     suggestion_dict = session["suggestion"]
@@ -362,6 +453,24 @@ async def publish(
         if t["display_name"] in needed_term_names
     ]
 
+    # Promoted synonyms / related terms become their own standalone
+    # GlossaryTerms plus structured term-to-term entry links of type
+    # "synonymous" or "related". Dedupe against names we're already
+    # publishing so the API doesn't 409-loop if the user ticks the same
+    # name twice or ticks something that's already a top-level term.
+    existing_names = {t.display_name.lower() for t in approved_terms}
+    term_links: list[dict] = []
+    for term, links in _build_promoted_terms(
+        promoted_synonyms, kind="synonym", existing=existing_names
+    ):
+        approved_terms.append(term)
+        term_links.extend(links)
+    for term, links in _build_promoted_terms(
+        promoted_related, kind="related", existing=existing_names
+    ):
+        approved_terms.append(term)
+        term_links.extend(links)
+
     filtered = GlossarySuggestion(
         industry=suggestion_dict.get("industry", ""),
         domain=suggestion_dict.get("domain", ""),
@@ -381,7 +490,9 @@ async def publish(
         bq_region=cfg.get("location", "us-central1"),
         dry_run=False,
     )
-    report = publisher.publish(filtered, dataset_id=bare_dataset)
+    report = publisher.publish(
+        filtered, dataset_id=bare_dataset, term_links=term_links
+    )
 
     return templates.TemplateResponse(
         request,
@@ -416,3 +527,62 @@ def _term_from_dict(d: dict) -> TermSuggestion:
         synonyms=d.get("synonyms", []),
         related_terms=d.get("related_terms", []),
     )
+
+
+def _build_promoted_terms(
+    values: list[str],
+    *,
+    kind: str,
+    existing: set[str],
+):
+    """Yield ``(TermSuggestion, [link_request, …])`` for promoted values.
+
+    Form values are formatted as
+    ``"<derived_name>|<parent_display_name>|<optional_description>"``
+    (see suggestions.html). Each unique derived name is emitted once —
+    even if ticked under multiple parents, we still only create one
+    term. The first non-empty description seen for that name is used as
+    the promoted term's definition; the parent linkage is encoded in
+    the description as well and materialised as entry links so Dataplex
+    carries structured relationships.
+
+    ``kind`` is ``"synonym"`` or ``"related"``; entry-link type is
+    ``"synonymous"`` / ``"related"`` accordingly.
+    """
+    seen: dict[str, dict] = {}  # name -> {parents: [...], description: "..."}
+    for raw in values:
+        parts = raw.split("|", 2)
+        if len(parts) < 2:
+            continue
+        name = parts[0].strip()
+        parent = parts[1].strip()
+        description = parts[2].strip() if len(parts) == 3 else ""
+        if not name or name.lower() in existing:
+            continue
+        slot = seen.setdefault(name, {"parents": [], "description": ""})
+        slot["parents"].append(parent)
+        if description and not slot["description"]:
+            slot["description"] = description
+
+    prefix = "Synonym of" if kind == "synonym" else "Related to"
+    link_type = "synonymous" if kind == "synonym" else "related"
+    for name, slot in seen.items():
+        dedup_parents = list(dict.fromkeys(slot["parents"]))
+        parent_ref = ", ".join(dedup_parents)
+        relationship_line = f"{prefix} {parent_ref}."
+        if slot["description"]:
+            definition = f"{slot['description']}\n\n{relationship_line}"
+        else:
+            definition = relationship_line
+        term = TermSuggestion(
+            display_name=name,
+            definition=definition,
+            synonyms=[],
+            related_terms=[{"name": p, "description": ""} for p in dedup_parents],
+        )
+        links = [
+            {"parent": parent, "child": name, "kind": link_type}
+            for parent in dedup_parents
+        ]
+        yield term, links
+        existing.add(name.lower())

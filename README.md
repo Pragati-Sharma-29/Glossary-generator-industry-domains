@@ -1,87 +1,228 @@
 # Glossary Generator using industry and domain context
 
 An agent that reads a BigQuery dataset, enriches it with Dataplex
-data-profile / data-insights results, grounds its reasoning in a Vertex AI
-RAG corpus of industry vocabularies, and proposes business-glossary terms
-plus column mappings. Suggestions can be written back to a Dataplex
-business glossary.
+data-profile / data-insights results, **auto-detects the industry**,
+grounds reasoning in the matching per-domain Vertex AI RAG corpus, and
+proposes business-glossary terms (with synonyms, related terms, and
+metrics) plus column mappings. Approved suggestions are written back to
+a Dataplex business glossary.
 
 ## Pipeline
 
 ```
 BigQuery ─┐
-          ├─▶ DatasetContext ─▶ Gemini (Vertex) ─▶ GlossarySuggestion ─▶ Dataplex glossary
-Dataplex ─┘          (schema + profile + insights)   │
-                                                     └ RAG retrieval (FIBO, HL7, GS1, internal…)
+          │
+Dataplex ─┼─▶ DatasetContext ─▶ industry_detector ─▶ per-domain corpus ─▶ Gemini (RAG-grounded)
+          │                     (no-RAG Gemini pass)                               │
+Operator ─┘                                                                        ▼
+  (optional instructions                                       GlossarySuggestion (terms + mappings)
+   + PDF reference doc)                                                            │
+                                                                                   ▼
+                                                                     Dataplex glossary
+                                                                     (REST API: terms +
+                                                                      column↔term +
+                                                                      term↔term links)
 ```
 
-Components:
+## Components
 
-| Module                              | Responsibility                                                    |
-|-------------------------------------|-------------------------------------------------------------------|
-| `bigquery_client.BigQueryCollector` | List tables, pull schema + small row samples.                     |
-| `dataplex_client.DataplexInsightsCollector` | Fold Dataplex `DATA_PROFILE` stats and `DATA_INSIGHTS` summaries onto each table. |
-| `vertex_rag.VertexRagClient`        | Gemini call with a Vertex RAG retrieval tool attached.            |
-| `glossary_publisher.GlossaryPublisher` | Create glossary terms and attach column mappings in Dataplex.   |
-| `agent.GlossaryGeneratorAgent`      | Orchestrates the above and renders the result.                    |
+| Module                                          | Responsibility                                                                                             |
+|-------------------------------------------------|------------------------------------------------------------------------------------------------------------|
+| `bigquery_client.BigQueryCollector`             | List tables, pull schema (no row samples).                                                                 |
+| `dataplex_client.DataplexInsightsCollector`     | Fold Dataplex `DATA_PROFILE` stats and `DATA_INSIGHTS` summaries onto tables that have a scan. Fail-soft.  |
+| `industry_detector.detect_domain`               | One short Gemini call, no RAG, classifies the dataset into one of seven industries (or `unknown`).         |
+| `vertex_rag.VertexRagClient`                    | Gemini call with a Vertex RAG retrieval tool bound to the detected domain's corpus.                        |
+| `glossary_publisher.GlossaryPublisher`          | Create glossary terms and entry links (column↔term + term↔term) via the Dataplex **REST** API.             |
+| `agent.GlossaryGeneratorAgent`                  | Orchestrates collection → detection → corpus resolution → generation → publish.                            |
+
+## Seven supported industries
+
+Each has its own RAG corpus with display name `industry-glossaries-<domain>`:
+
+| Key                | Covers                                                                                |
+|--------------------|----------------------------------------------------------------------------------------|
+| `retail_ecommerce` | Cloud Retail API, GS1 (GTIN/GLN/SSCC), schema.org commerce, commercetools, TheLook     |
+| `finance_banking`  | FIBO concepts, FINOS CDM, ISO identifiers (LEI/IBAN/ISIN/CUSIP), ACORD insurance       |
+| `healthcare`       | FHIR R4, OMOP CDM, IDMP (MPID/PhPID/substance), ICD-10 / CPT / LOINC / SNOMED          |
+| `erp_supply_chain` | SAP / Oracle EBS master + transactional, GS1 EPCIS events                              |
+| `crm_marketing`    | Salesforce / HubSpot objects, GA4, UTM + attribution                                   |
+| `telco`            | TM Forum SID, 3GPP (MSISDN / IMSI / Cell / Bearer / PDU Session), FCAPS OSS vocabulary |
+| `automotive`       | schema.org Vehicle subtree, VIN (ISO 3779), EDM Council AUTO, NHTSA FARS, OBD-II DTCs  |
+
+Every domain also carries a **Metrics & KPIs** section (~15 per domain — e.g.
+retail GMV/AOV/CVR, finance NIM/ROA/NPL, healthcare LOS/30-day Readmit,
+ERP DIO/Perfect Order, CRM CAC/NRR, telco ARPU/Churn, automotive
+Gross-per-Vehicle/CSI) so the agent can surface metrics under each term.
 
 ## Inputs
 
-* `dataset_id` — `"project.dataset"` or `"dataset"` (project from env)
-* `instructions` *(optional)* — free-form guidance, e.g. `"this is a P&C
-  insurance claims mart; prefer ACORD vocabulary."`
+* `project_id` — GCP project hosting BigQuery, Dataplex, and RAG corpora
+* `dataset_id` — `"project.dataset"` or `"dataset"`
+* `instructions` *(optional)* — free-form guidance, e.g. "P&C insurance
+  claims mart; prefer ACORD vocabulary." Use this to nudge industry
+  detection or vocabulary preference.
+* `reference_pdf` *(optional, web only)* — attach an internal glossary,
+  style guide, or spec PDF. Text is extracted (up to 50 000 chars) and
+  folded into the instructions so both detection and generation see it.
+
+The agent **auto-detects the industry** from table/column names — you
+never need to pick it manually. The detector returns a confidence score
+and reasoning, both shown in the UI.
 
 ## Prerequisites
 
-1. Service account / ADC with roles:
+1. ADC or service account with:
    * `roles/bigquery.dataViewer`, `roles/bigquery.metadataViewer`
    * `roles/dataplex.dataScanViewer`
    * `roles/aiplatform.user`
-   * `roles/dataplex.glossaryEditor` (only when publishing)
-2. Dataplex `DATA_PROFILE` (and ideally `DATA_INSIGHTS`) scans should be
-   run against the target tables for the strongest recommendations. The
-   collector calls `get_data_scan` only when a matching scan is found in
-   the project listing — tables without a scan trigger no extra Dataplex
-   API calls and are processed schema-only. Their names are returned in
-   `result["tables_without_scans"]` and the web app surfaces a warning
-   banner so the operator knows to create scans for higher confidence.
-3. A Vertex AI RAG corpus populated with the glossary material you want the
-   agent to ground against (FIBO, HL7, GS1, internal stewardship PDFs, …).
+   * `roles/dataplex.glossaryEditor` (publish only)
+2. Dataplex `DATA_PROFILE` (and optionally `DATA_INSIGHTS`) scans on the
+   target tables — strongly recommended for higher-confidence mappings.
+   Tables without a scan are processed schema-only; their names surface
+   in a warning banner on the Review page.
+3. **Seven per-domain Vertex AI RAG corpora** with display names
+   `industry-glossaries-<domain>` — built by
+   `scripts/build_rag_corpus.py` from the curated `seed_docs/*.md` files.
 
 ## Install
 
 ```bash
-pip install -e .
-# or
 pip install -r requirements.txt
+# or
+pip install -e .
 ```
 
-## Run
+Key dep: `pypdf` for reference-PDF extraction in the web app.
+
+## Quick start (one command)
+
+```bash
+./scripts/bootstrap.sh --project my-gcp-project
+```
+
+Enables required APIs, does `gcloud auth application-default login` if
+needed, installs deps, checks for the seven per-domain corpora and
+builds any that are missing (~1–3 min each from seed_docs only),
+creates the `enterprise-glossary` Dataplex glossary if absent, then
+launches `uvicorn webapp:app` on port 8080.
+
+Every step is idempotent — re-runs are safe. Useful flags:
+
+```
+--location REGION        Vertex / Dataplex region (default: europe-west4)
+--glossary ID            Target Dataplex glossary id (default: enterprise-glossary)
+--corpus-name PREFIX     Display-name prefix; per-domain corpora become <prefix>-<domain>
+--bucket NAME            GCS bucket for RAG sources
+--skip-apis / --skip-auth / --skip-deps / --skip-corpus / --skip-glossary / --skip-serve
+--port N                 Web app port (default: 8080)
+```
+
+## Manual launch
 
 ```bash
 export GOOGLE_CLOUD_PROJECT=my-proj
-export GOOGLE_CLOUD_LOCATION=us-central1
-export VERTEX_RAG_CORPUS=projects/my-proj/locations/us-central1/ragCorpora/1234
-export DATAPLEX_GLOSSARY_ID=enterprise-glossary       # for --publish
+export GOOGLE_CLOUD_LOCATION=europe-west4          # default; Vertex RAG region
+export DATAPLEX_GLOSSARY_ID=enterprise-glossary
+export VERTEX_RAG_CORPUS_PREFIX=industry-glossaries # optional; match the build
 
-# dry-run: print JSON suggestions only
-python -m glossary_generator my_dataset \
-    --instructions "retail loyalty marts; grounded in GS1 + NRF ARTS"
-
-# publish to the glossary
-python -m glossary_generator my_dataset --publish
+uvicorn webapp:app --host 0.0.0.0 --port 8080
 ```
 
-## Output
+Dataplex scan location (`DATAPLEX_LOCATION`) stays independent — set
+it to the dataset's BigQuery region (e.g. `us-central1` for US-hosted
+data) even if the Vertex corpus lives elsewhere.
+
+## Building the RAG corpora
+
+```bash
+python scripts/build_rag_corpus.py \
+    --project my-proj \
+    --location europe-west4 \
+    --gcs-bucket my-proj-rag-sources
+```
+
+Creates (or appends to) all seven corpora. Flags:
+
+```
+--domains retail_ecommerce finance_banking …  # limit to specific industries
+--corpus-display-name PREFIX                  # default: industry-glossaries
+--gcs-prefix PATH                             # default: rag-sources
+--dry-run                                     # list sources, don't fetch/upload
+--skip-upload                                 # fetch + process but don't touch GCS/Vertex
+-vv                                           # verbose logging
+```
+
+### Grounding primary source: `seed_docs/*.md`
+
+Each seed doc is hand-curated markdown with `## Term` headers — one
+chunk per term in the RAG corpus. Each term entry carries:
+
+* a definition paragraph
+* **Synonyms** (alternative names the same concept is called across
+  systems) — feeds retrieval and the model's output synonyms
+* **Typical columns** (column-name hints) — lets retrieval match a
+  column like `msisdn` or `icd_code` to the right concept
+* **Related terms** — adjacent entities and standard metrics/KPIs
+
+Because the content is in-repo and static, every corpus build produces
+identical, deterministic grounding — no reliance on live external URLs.
+
+### Optional GitHub augmentation
+
+Set `GITHUB_TOKEN` (PAT with `public_repo` scope) before running
+`build_rag_corpus.py` to also pull content from live repos (FIBO, FHIR,
+commercetools, cortex-data-foundation, edmcouncil/auto, …). Without a
+token the build uses seed_docs only and still produces a usable corpus
+— that's the primary path.
+
+## Web app flow
+
+1. **Home** — enter GCP project id → click **Load datasets** → pick a
+   dataset → optionally narrow to specific tables → optionally type
+   instructions or attach a reference PDF → click **Generate
+   suggestions**. A loader overlay stays up while the agent runs
+   (typically 20–60 s).
+2. **Review** — shows:
+   - **Detected industry** card with confidence + reasoning; warning
+     if no corpus was resolved for the detected domain.
+   - **Proposed terms** — each with its definition. Expand to see the
+     term's synonyms and related terms (including metrics); each has
+     a 1-line description explaining what it is and how it maps.
+     Tick any to promote them into standalone glossary terms on
+     publish.
+   - **Column mappings** table — approve/decline each; low-confidence
+     rows highlighted; bulk Approve-all / Decline-all.
+3. **Publish** — writes to the Dataplex glossary using the REST API:
+   - `POST /glossaries/{g}/terms` — one per approved + promoted term
+   - `POST /entryGroups/@bigquery/entryLinks` — one `definition` link
+     per approved column↔term mapping
+   - `POST /entryGroups/@dataplex-glossary/entryLinks` — one
+     `synonymous` or `related` link per promoted-term relationship,
+     wiring the new term to its parent structurally
+
+The result page lists all three sections with per-row status (created /
+exists / error). Session state is held in-process; swap `_SESSIONS` in
+`webapp/main.py` for Redis/Firestore to run multi-instance.
+
+## Output (JSON mode)
 
 ```json
 {
   "suggestion": {
     "industry": "Retail",
     "domain": "Customer Loyalty",
-    "rationale": "...",
+    "rationale": "…",
     "terms": [
-      {"display_name": "Loyalty Member", "definition": "...", "synonyms": ["Rewards Member"]}
+      {
+        "display_name": "Loyalty Member",
+        "definition": "A Customer enrolled in the retailer's rewards program…",
+        "synonyms": [
+          {"name": "Rewards Member", "description": "Alternative name used on the member-facing portal."}
+        ],
+        "related_terms": [
+          {"name": "Redemption Rate", "description": "Share of earned loyalty points that members redeem; derived from member_id × points_earned × points_redeemed."}
+        ]
+      }
     ],
     "mappings": [
       {
@@ -89,86 +230,63 @@ python -m glossary_generator my_dataset --publish
         "table_id": "members",
         "column_name": "member_id",
         "confidence": 0.93,
-        "rationale": "Primary key; unique per customer; matches GS1 GLN pattern."
+        "rationale": "Primary key; matches GS1 GLN pattern; referenced by orders.member_id."
       }
     ]
   },
-  "publish_report": { "...": "..." }
+  "detected_industry": {
+    "domain": "retail_ecommerce",
+    "confidence": 0.91,
+    "reasoning": "Tables members, orders, events with columns like loyalty_tier, order_id, event_type=cart are characteristic of retail loyalty.",
+    "corpus_used": "projects/…/ragCorpora/…"
+  },
+  "tables_without_scans": [],
+  "publish_report": {
+    "created_terms": [ … ],
+    "mappings":      [ … ],
+    "term_links":    [ … ]
+  }
 }
 ```
 
-## Web app
+## Publishing behaviour
 
-A small FastAPI UI is included for the interactive flow — submit a dataset,
-review each mapping, then publish only the ones you approve.
+* **Terms** are created (or skipped as "exists") under the configured
+  glossary. A promoted synonym/related term goes into the **same
+  glossary** as the canonical one.
+* **Synonyms and related terms** of any created term are also folded
+  into that term's description (as `**Also known as:** …` and
+  `**Related:** …`) so they're visible in the Dataplex UI even when
+  not promoted.
+* **Column↔term links** are `definition`-type EntryLinks in the
+  system-managed `@bigquery` entry group.
+* **Term↔term links** (when the operator promotes synonyms/related)
+  are `synonymous`- or `related`-type EntryLinks in the system-managed
+  `@dataplex-glossary` entry group, keeping the relationship
+  structurally queryable.
 
-### Quick start (one command)
+## Default region: `europe-west4`
 
-```bash
-./scripts/bootstrap.sh --project my-gcp-project
-```
+Vertex AI RAG Engine's Spanner-mode corpora are allowlisted in
+`europe-west4` without extra opt-in, whereas `us-central1` (and
+certain other US regions) require forcing Serverless (KNN) mode for
+new projects. The default of `europe-west4` avoids that friction.
 
-That script:
-
-1. Enables required APIs (BigQuery, Dataplex, Vertex AI, Storage).
-2. Runs `gcloud auth application-default login` if ADC isn't set.
-3. Runs `pip install -r requirements.txt` if deps are missing.
-4. Builds the `industry-glossaries` RAG corpus (only if absent — ~5–15 min first time).
-5. Creates the `enterprise-glossary` Dataplex glossary if it doesn't exist.
-6. Launches `uvicorn webapp:app` on port 8080.
-
-Re-runs are safe: every step is idempotent and skipped when the resource
-already exists. Use flags (`--skip-corpus`, `--skip-serve`, `--glossary`,
-`--port`, …) to opt out of individual steps or customise names — see
-`./scripts/bootstrap.sh --help`.
-
-### Manual launch
-
-```bash
-export GOOGLE_CLOUD_PROJECT=my-proj
-export DATAPLEX_GLOSSARY_ID=enterprise-glossary
-# Optional: override the default corpus display name
-# export VERTEX_RAG_CORPUS_DISPLAY_NAME=industry-glossaries
-
-uvicorn webapp:app --reload --port 8080
-# open http://localhost:8080
-```
-
-The web app grounds each request in a **per-industry RAG corpus** built
-by `scripts/build_rag_corpus.py`. One corpus per domain (retail, finance,
-healthcare, ERP, CRM, telco, automotive) is created with display name
-`industry-glossaries-<domain>`, and the UI's Industry dropdown routes the
-query to exactly one of them. This prevents cross-domain bleed (e.g.
-healthcare vocabulary leaking into retail suggestions).
-
-The primary grounding for every corpus is the hand-curated markdown in
-`seed_docs/<domain>.md` — guaranteed content, no live GitHub fetch
-required. Set `GITHUB_TOKEN` (PAT with `public_repo` scope) before running
-the build to also pull optional augmentation from live repos (FIBO, FHIR,
-commercetools, …); without it, the build uses seed docs only and still
-works.
-
-Flow:
-
-1. **Home** – enter project id, dataset id, and optional instructions.
-2. **Review** – the agent runs; each suggested term+mapping is displayed
-   with an approve checkbox (low-confidence rows are highlighted).
-3. **Publish** – approved mappings are written to Dataplex:
-   - A `GlossaryTerm` is created under `projects/{p}/locations/{loc}/glossaries/{g}/terms/{slug}`.
-   - An `EntryLink` of type `definition` is created in the `@bigquery`
-     entry group linking the column to the term.
-
-Session state is held in-process; swap `_SESSIONS` in `webapp/main.py`
-for Redis/Firestore to run multi-instance.
+BigQuery datasets in any region are still queryable — metadata reads
+don't depend on Vertex's region. Dataplex scans live alongside the
+data (US datasets → US scans), so `DATAPLEX_LOCATION` is decoupled
+from `GOOGLE_CLOUD_LOCATION`.
 
 ## Extending
 
-* **Swap in another vocabulary**: add files to your RAG corpus and re-index.
-  No code change needed.
-* **Add detectors**: extend `DataplexInsightsCollector` to also call
-  `DATA_QUALITY` or Sensitive Data Protection results for PII-aware mappings.
-* **Custom aspect schema**: edit `GlossaryPublisher._attach_mapping` to upsert
-  whatever aspect type your org uses for term-to-column linkage.
+* **New vocabulary**: add or extend a `seed_docs/<domain>.md` —
+  `## <Term>` sections become one indexed chunk each. Re-run
+  `build_rag_corpus.py --domains <domain>` to index.
+* **New detectors**: extend `DataplexInsightsCollector` to pull
+  `DATA_QUALITY` or Sensitive Data Protection signals for PII-aware
+  mappings.
+* **Custom aspect schema**: edit `GlossaryPublisher._create_entry_link`
+  to emit whatever aspect type your org uses for column↔term linkage.
 
 ## Branch
 

@@ -177,3 +177,98 @@ The EPCIS post-Event state of the object: in_transit, in_progress,
 active, damaged, destroyed, sold.
 
 - **Typical columns:** `disposition`, `status`
+
+---
+
+# ERP / Supply Chain Metrics & KPIs
+
+SCOR-model and APICS-standard operational measures. Surface as
+``related_terms`` on Material, Inventory, and Order entities.
+
+## Inventory Turnover
+
+`COGS / average inventory value`. Annualized.
+
+- **Related entities:** Material, Inventory
+- **Typical columns:** `inventory_turns`, `turnover_ratio`
+
+## Days Inventory Outstanding (DIO)
+
+`365 / Inventory Turnover`. Days of inventory on hand.
+
+- **Related entities:** Material, Inventory
+- **Typical columns:** `dio`, `days_inventory`
+
+## Days Sales Outstanding / Payables Outstanding (DSO / DPO)
+
+Receivables / payables cycle times. Part of the cash conversion cycle.
+
+- **Related entities:** Invoice, Sales Order
+- **Typical columns:** `dso`, `dpo`
+
+## Cash Conversion Cycle
+
+`DIO + DSO − DPO`. Working-capital efficiency.
+
+- **Related entities:** Invoice, Material
+- **Typical columns:** `ccc`, `cash_cycle`
+
+## On-Time Delivery (OTD)
+
+Share of Deliveries completed by their promised date.
+
+- **Related entities:** Delivery, Sales Order
+- **Typical columns:** `otd`, `on_time_flag`
+
+## Perfect Order Rate
+
+Orders delivered complete, on time, damage-free, and with correct
+documentation.
+
+- **Related entities:** Sales Order, Delivery
+- **Typical columns:** `perfect_order_rate`
+
+## Order Fulfillment Cycle Time
+
+Hours or days from Sales Order entry to Delivery completion.
+
+- **Related entities:** Sales Order, Delivery
+- **Typical columns:** `cycle_time`, `fulfillment_cycle_hours`
+
+## Stock-out Rate / Fill Rate
+
+Share of order lines that couldn't be filled from inventory on the
+first attempt (stock-out), or conversely filled from stock (fill rate).
+
+- **Related entities:** Inventory, Material
+- **Typical columns:** `stockout_rate`, `fill_rate`
+
+## Gross Margin Return on Investment (GMROI)
+
+`Gross margin / average inventory cost`. Combines margin with
+inventory efficiency.
+
+- **Related entities:** Material, Inventory
+- **Typical columns:** `gmroi`
+
+## Supplier Defect Rate / PPM
+
+Defective parts per million received from a Vendor. Quality metric.
+
+- **Related entities:** Vendor, Goods Receipt
+- **Typical columns:** `defect_ppm`, `supplier_defect_rate`
+
+## Manufacturing Cycle Time
+
+Time from Work Order release to production completion.
+
+- **Related entities:** Work Order, Work Center
+- **Typical columns:** `cycle_time`, `mfg_cycle_time`
+
+## Overall Equipment Effectiveness (OEE)
+
+`Availability × Performance × Quality`. Manufacturing productivity.
+
+- **Related entities:** Work Center, Work Order
+- **Typical columns:** `oee`, `availability`, `performance`,
+  `quality_rate`

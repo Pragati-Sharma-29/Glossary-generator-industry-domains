@@ -21,6 +21,13 @@ Your objectives, in order:
       cite concepts from the RAG corpus when applicable. Always produce
       terms and mappings even when industry or domain is "Unknown".
   (c) Map each term to specific dataset columns with a confidence score.
+  (d) For each term, populate ``related_terms`` with 2–5 entries that
+      include BOTH adjacent domain entities AND 1–3 standard industry
+      METRICS / KPIs commonly derived from it (e.g. for a retail Order
+      term: "Average Order Value", "Gross Merchandise Value"; for a
+      healthcare Encounter term: "Length of Stay", "30-day Readmission
+      Rate"). Use the exact metric names that appear in the retrieved
+      RAG material when available.
 Be conservative: only propose mappings you can justify from the evidence.
 Always return valid JSON matching the requested schema.
 """
@@ -123,8 +130,18 @@ Return ONLY a JSON object (no prose, no code fences) with this exact shape:
     {{
       "display_name": "<string>",
       "definition": "<string>",
-      "synonyms": ["<string>", ...],
-      "related_terms": ["<string>", ...]
+      "synonyms": [
+        {{
+          "name": "<alternative name for this term>",
+          "description": "<one sentence: what it means and why it maps to this term>"
+        }}
+      ],
+      "related_terms": [
+        {{
+          "name": "<adjacent domain entity OR metric/KPI name>",
+          "description": "<one sentence: what it is and its relationship to this term; for metrics, note how it is derived from this term's column(s)>"
+        }}
+      ]
     }}
   ],
   "mappings": [

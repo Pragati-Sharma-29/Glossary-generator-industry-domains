@@ -63,5 +63,34 @@
   {% endif %}
 </section>
 
+{% if report.term_links %}
+<section class="card">
+  <h3>Term-to-term links ({{ report.term_links | length }})</h3>
+  <p class="meta">
+    Structured relationships between promoted synonyms / related terms
+    and their parent term, stored in the
+    <code>@dataplex-glossary</code> entry group.
+  </p>
+  <table class="mappings">
+    <thead>
+      <tr>
+        <th>Kind</th><th>Parent term</th><th>Child term</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for l in report.term_links %}
+      <tr>
+        <td>{{ l.kind }}</td>
+        <td>{{ l.parent }}</td>
+        <td>{{ l.child }}</td>
+        <td>{{ l.status | default("created") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
 <p><a href="/" class="button primary">Run again</a></p>
 {% endblock %}

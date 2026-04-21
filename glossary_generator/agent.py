@@ -209,8 +209,8 @@ class GlossaryGeneratorAgent:
             TermSuggestion(
                 display_name=t["display_name"],
                 definition=t["definition"],
-                synonyms=t.get("synonyms", []),
-                related_terms=t.get("related_terms", []),
+                synonyms=_normalise_refs(t.get("synonyms", [])),
+                related_terms=_normalise_refs(t.get("related_terms", [])),
             )
             for t in raw.get("terms", [])
         ]
@@ -305,3 +305,24 @@ class GlossaryGeneratorAgent:
         )
         bare_dataset = dataset_id.split(".", 1)[-1]
         return publisher.publish(suggestion, dataset_id=bare_dataset)
+
+
+def _normalise_refs(items) -> list[dict]:
+    """Coerce synonym / related_term entries into ``{name, description}``.
+
+    The prompt now asks the model to return dicts, but tolerate legacy
+    plain-string entries (empty description) and malformed items so a
+    single bad row doesn't crash the whole response parse.
+    """
+    out: list[dict] = []
+    for item in items or []:
+        if isinstance(item, str):
+            name = item.strip()
+            if name:
+                out.append({"name": name, "description": ""})
+        elif isinstance(item, dict):
+            name = str(item.get("name", "")).strip()
+            description = str(item.get("description", "")).strip()
+            if name:
+                out.append({"name": name, "description": description})
+    return out

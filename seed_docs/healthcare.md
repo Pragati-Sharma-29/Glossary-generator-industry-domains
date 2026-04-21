@@ -213,3 +213,104 @@ Systematized Nomenclature of Medicine — Clinical Terms — a comprehensive
 clinical terminology used alongside or instead of ICD.
 
 - **Typical columns:** `snomed_code`, `snomed_concept_id`
+
+---
+
+# Healthcare Metrics & KPIs
+
+Standard HEDIS, CMS, and operational measures. Surface as
+``related_terms`` on clinical and claims entities.
+
+## Length of Stay (LOS)
+
+Discharge date minus admission date for an inpatient Encounter, in days.
+Average LOS is the primary inpatient utilization metric.
+
+- **Related entities:** Encounter, Admission
+- **Typical columns:** `los`, `length_of_stay`, `average_los`
+
+## 30-Day Readmission Rate
+
+Share of inpatient Encounters followed by another inpatient Encounter
+within 30 days. CMS uses this for Star Ratings and value-based payment.
+
+- **Related entities:** Encounter, Admission
+- **Typical columns:** `readmission_30d`, `readmit_rate`
+
+## Mortality Rate
+
+Deaths per 1,000 Encounters, optionally risk-adjusted. Hospital quality
+and outcome measure.
+
+- **Related entities:** Encounter, Patient
+- **Typical columns:** `mortality_rate`, `death_count`
+
+## HEDIS Measures
+
+A set of ~90 standardized quality measures (e.g. CBP blood pressure
+control, BCS breast-cancer screening, FUH follow-up after hospitalization).
+Used in NCQA accreditation and Medicare Star Ratings.
+
+- **Related entities:** Coverage, Observation
+- **Typical columns:** `hedis_measure`, `measure_id`, `numerator`,
+  `denominator`
+
+## Medical Loss Ratio (MLR)
+
+`Claims paid / premiums earned`. ACA mandates minimum MLR for health
+insurers (80-85%).
+
+- **Related entities:** Claim, Coverage
+- **Typical columns:** `mlr`, `medical_loss_ratio`
+
+## Claims Denial Rate
+
+Share of Claims denied at first submission. Revenue-cycle metric.
+
+- **Related entities:** Claim
+- **Typical columns:** `denial_rate`, `denied_flag`
+
+## Per Member Per Month (PMPM)
+
+`Total cost / (members × months)`. Standard actuarial unit for
+health-plan cost.
+
+- **Related entities:** Coverage, Claim
+- **Typical columns:** `pmpm`, `per_member_per_month`
+
+## Medication Adherence (PDC)
+
+Proportion of Days Covered by a medication over a window. >0.8 is
+adherent per CMS Star Ratings.
+
+- **Related entities:** Medication Statement, Prescription
+- **Typical columns:** `pdc`, `adherence`
+
+## A1c Control Rate
+
+Share of diabetic Patients with HbA1c < 8.0%. HEDIS CDC measure.
+
+- **Related entities:** Observation, Patient, Condition
+- **Typical columns:** `a1c_control_rate`, `hba1c_last`
+
+## Average Revenue per Encounter (ARPE)
+
+`Allowed amount / Encounters` over a window.
+
+- **Related entities:** Encounter, Claim
+- **Typical columns:** `arpe`, `avg_revenue_per_encounter`
+
+## Bed Occupancy Rate
+
+`Patient-days / available bed-days`. Hospital utilization.
+
+- **Related entities:** Encounter, Organization
+- **Typical columns:** `occupancy_rate`, `bed_utilization`
+
+## Emergency Department Throughput
+
+Door-to-doc time, door-to-disposition time, ED length of stay. CMS ED
+quality measures.
+
+- **Related entities:** Encounter
+- **Typical columns:** `door_to_doc`, `ed_los`

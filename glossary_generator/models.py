@@ -47,12 +47,19 @@ class DatasetContext:
 
 @dataclass
 class TermSuggestion:
-    """A proposed business glossary term."""
+    """A proposed business glossary term.
+
+    ``synonyms`` and ``related_terms`` are lists of dicts shaped
+    ``{"name": str, "description": str}``. The description is a one-line
+    explanation of the secondary term and why it relates to this term —
+    used in the review UI and, if the operator promotes it, as the
+    definition of the new standalone GlossaryTerm.
+    """
 
     display_name: str
     definition: str
-    synonyms: list[str] = field(default_factory=list)
-    related_terms: list[str] = field(default_factory=list)
+    synonyms: list[dict] = field(default_factory=list)
+    related_terms: list[dict] = field(default_factory=list)
 
 
 @dataclass
