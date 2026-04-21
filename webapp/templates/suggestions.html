@@ -83,9 +83,14 @@
                     <input type="checkbox"
                            form="publish-form"
                            name="promote_synonym"
-                           value="{{ syn }}|{{ t.display_name }}">
-                    Create <code>{{ syn }}</code> as its own term
-                    (synonym&nbsp;of&nbsp;<em>{{ t.display_name }}</em>)
+                           value="{{ syn.name }}|{{ t.display_name }}|{{ syn.description }}">
+                    <span class="derived-name">
+                      <code>{{ syn.name }}</code>
+                      <span class="meta">— synonym of <em>{{ t.display_name }}</em></span>
+                    </span>
+                    {% if syn.description %}
+                      <span class="derived-desc">{{ syn.description }}</span>
+                    {% endif %}
                   </label>
                 </li>
               {% endfor %}
@@ -103,9 +108,14 @@
                     <input type="checkbox"
                            form="publish-form"
                            name="promote_related"
-                           value="{{ rel }}|{{ t.display_name }}">
-                    Create <code>{{ rel }}</code> as its own term
-                    (related&nbsp;to&nbsp;<em>{{ t.display_name }}</em>)
+                           value="{{ rel.name }}|{{ t.display_name }}|{{ rel.description }}">
+                    <span class="derived-name">
+                      <code>{{ rel.name }}</code>
+                      <span class="meta">— related to <em>{{ t.display_name }}</em></span>
+                    </span>
+                    {% if rel.description %}
+                      <span class="derived-desc">{{ rel.description }}</span>
+                    {% endif %}
                   </label>
                 </li>
               {% endfor %}

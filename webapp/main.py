@@ -448,35 +448,48 @@ def _build_promoted_terms(
 ):
     """Yield ``(TermSuggestion, [link_request, …])`` for promoted values.
 
-    Form values are formatted as ``"<derived_name>|<parent_display_name>"``
+    Form values are formatted as
+    ``"<derived_name>|<parent_display_name>|<optional_description>"``
     (see suggestions.html). Each unique derived name is emitted once —
-    even if ticked under multiple parents, we still only create one term
-    and emit one link request per (child, parent) pair so Dataplex ends
-    up with structured term-to-term relationships in addition to the
-    description text. ``kind`` is either ``"synonym"`` or ``"related"``;
-    the entry-link type on the link request is ``"synonymous"`` or
-    ``"related"`` respectively (the Dataplex-standard type names).
+    even if ticked under multiple parents, we still only create one
+    term. The first non-empty description seen for that name is used as
+    the promoted term's definition; the parent linkage is encoded in
+    the description as well and materialised as entry links so Dataplex
+    carries structured relationships.
+
+    ``kind`` is ``"synonym"`` or ``"related"``; entry-link type is
+    ``"synonymous"`` / ``"related"`` accordingly.
     """
-    seen: dict[str, list[str]] = {}
+    seen: dict[str, dict] = {}  # name -> {parents: [...], description: "..."}
     for raw in values:
-        if "|" not in raw:
+        parts = raw.split("|", 2)
+        if len(parts) < 2:
             continue
-        name, parent = raw.split("|", 1)
-        name, parent = name.strip(), parent.strip()
+        name = parts[0].strip()
+        parent = parts[1].strip()
+        description = parts[2].strip() if len(parts) == 3 else ""
         if not name or name.lower() in existing:
             continue
-        seen.setdefault(name, []).append(parent)
+        slot = seen.setdefault(name, {"parents": [], "description": ""})
+        slot["parents"].append(parent)
+        if description and not slot["description"]:
+            slot["description"] = description
 
     prefix = "Synonym of" if kind == "synonym" else "Related to"
     link_type = "synonymous" if kind == "synonym" else "related"
-    for name, parents in seen.items():
-        dedup_parents = list(dict.fromkeys(parents))
+    for name, slot in seen.items():
+        dedup_parents = list(dict.fromkeys(slot["parents"]))
         parent_ref = ", ".join(dedup_parents)
+        relationship_line = f"{prefix} {parent_ref}."
+        if slot["description"]:
+            definition = f"{slot['description']}\n\n{relationship_line}"
+        else:
+            definition = relationship_line
         term = TermSuggestion(
             display_name=name,
-            definition=f"{prefix} {parent_ref}.",
+            definition=definition,
             synonyms=[],
-            related_terms=dedup_parents,
+            related_terms=[{"name": p, "description": ""} for p in dedup_parents],
         )
         links = [
             {"parent": parent, "child": name, "kind": link_type}

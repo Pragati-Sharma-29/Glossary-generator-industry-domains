@@ -130,8 +130,18 @@ Return ONLY a JSON object (no prose, no code fences) with this exact shape:
     {{
       "display_name": "<string>",
       "definition": "<string>",
-      "synonyms": ["<string>", ...],
-      "related_terms": ["<string>", ...]
+      "synonyms": [
+        {{
+          "name": "<alternative name for this term>",
+          "description": "<one sentence: what it means and why it maps to this term>"
+        }}
+      ],
+      "related_terms": [
+        {{
+          "name": "<adjacent domain entity OR metric/KPI name>",
+          "description": "<one sentence: what it is and its relationship to this term; for metrics, note how it is derived from this term's column(s)>"
+        }}
+      ]
     }}
   ],
   "mappings": [

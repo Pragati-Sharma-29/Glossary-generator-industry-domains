@@ -231,6 +231,26 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.derived-list label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  align-items: start;
+  padding: 6px 2px;
+  cursor: pointer;
+}
+.derived-list label > input[type="checkbox"] {
+  grid-row: 1 / 3;
+  margin-top: 3px;
+}
+.derived-name { font-size: 14px; }
+.derived-desc {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 /* ─── Loading overlay ────────────────────────────────────────────────────── */
 
 .loader-overlay {
