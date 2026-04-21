@@ -75,7 +75,23 @@ class GlossaryPublisher:
         )
 
     def _term_name(self, term_id: str) -> str:
+        """Resource name of a glossary term (used for create + GET)."""
         return f"{self.glossary_name}/terms/{term_id}"
+
+    def _term_entry_name(self, term_id: str) -> str:
+        """Entry-form name of a glossary term (used in EntryReferences).
+
+        Dataplex rejects a raw ``projects/…/glossaries/{g}/terms/{t}`` as
+        an EntryReference.name with HTTP 400 "invalid format". Glossary
+        terms are catalogued in the system-managed ``@dataplex`` entry
+        group at location ``global``; references must be the entry form.
+        """
+        term_resource = self._term_name(term_id)
+        entry_group = (
+            f"projects/{self.project_id}/locations/global"
+            f"/entryGroups/@dataplex"
+        )
+        return f"{entry_group}/entries/{quote(term_resource, safe='')}"
 
     def _bigquery_entry_group(self) -> str:
         return (
@@ -396,7 +412,10 @@ class GlossaryPublisher:
         self, mapping: ColumnMapping, *, dataset_id: str
     ) -> dict:
         term_slug = self._slug(mapping.term_display_name)
-        term_resource = self._term_name(term_slug)
+        # Reference the term in its entry form (inside @dataplex), not
+        # its raw glossary-term resource path — Dataplex 400s on the
+        # latter as "invalid EntryReference format".
+        term_resource = self._term_entry_name(term_slug)
         column_entry = self._bigquery_column_entry(dataset_id, mapping.table_id)
         # Deterministic id so re-publishing the same (term, table, column)
         # triple produces the same link id → Dataplex 409 → we mark
@@ -487,8 +506,10 @@ class GlossaryPublisher:
         kind = link.get("kind", "related")
         parent_slug = self._slug(parent_display)
         child_slug = self._slug(child_display)
-        parent_resource = self._term_name(parent_slug)
-        child_resource = self._term_name(child_slug)
+        # Term-to-term entry links also reference terms via their
+        # entry form, same reasoning as _create_entry_link above.
+        parent_resource = self._term_entry_name(parent_slug)
+        child_resource = self._term_entry_name(child_slug)
         link_type = (
             f"projects/dataplex-types/locations/global/entryLinkTypes/{kind}"
         )
