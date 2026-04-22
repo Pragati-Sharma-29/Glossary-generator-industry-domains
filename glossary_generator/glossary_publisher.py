@@ -71,6 +71,11 @@ class GlossaryPublisher:
         # or created by a prior run with a different slug) is reused
         # instead of duplicated.
         self._term_id_by_display: dict[str, str] = {}
+        # Project *number* lazily resolved via cloudresourcemanager. The
+        # @dataplex entry id for a glossary term must carry the project
+        # NUMBER ("Entry ID must contain project number"), even though
+        # the glossary/term resource names themselves use the project id.
+        self._project_number_cache: Optional[str] = None
 
     # ─────────────────────────────────────────────────────────── resource names
 
@@ -88,20 +93,22 @@ class GlossaryPublisher:
     def _term_entry_name(self, term_id: str) -> str:
         """Entry-form name of a glossary term (used in EntryReferences).
 
-        Dataplex rejects a raw ``projects/…/glossaries/{g}/terms/{t}`` as
-        an EntryReference.name with HTTP 400 "invalid format". Glossary
-        terms are catalogued in the system-managed ``@dataplex`` entry
-        group at location ``global``; references must be the entry form.
+        Dataplex's @dataplex entry id for a glossary term must be the
+        full term resource name expressed with the project **number**,
+        not the project id. The component path is kept **unencoded**:
 
-        The id portion after ``/entries/`` keeps **literal slashes** —
-        URL-encoding them produces the 404 ``Entry
-        projects/%2F…%2Fterms%2F<slug> does not exist`` that Dataplex
-        emits when the encoded form doesn't resolve to a real entry.
-        Per the manage-glossaries reference the full name is:
-        ``projects/{p}/locations/global/entryGroups/@dataplex/entries/
-        projects/{p}/locations/global/glossaries/{g}/terms/{t}``.
+          projects/{p}/locations/global/entryGroups/@dataplex/entries/
+          projects/{PROJECT_NUMBER}/locations/global/glossaries/{g}/terms/{t}
+
+        A URL-encoded id yields HTTP 404 ``Entry projects%2F…%2Fterms%2F…
+        does not exist``; a project-id id yields HTTP 400 ``Entry ID
+        must contain project number``.
         """
-        term_resource = self._term_name(term_id)
+        project_num = self._project_number()
+        term_resource = (
+            f"projects/{project_num}/locations/{self.location}"
+            f"/glossaries/{self.glossary_id}/terms/{term_id}"
+        )
         entry_group = (
             f"projects/{self.project_id}/locations/global"
             f"/entryGroups/@dataplex"
@@ -145,6 +152,43 @@ class GlossaryPublisher:
         if not self._creds.valid:
             self._creds.refresh(google.auth.transport.requests.Request())
         return self._creds.token
+
+    def _project_number(self) -> str:
+        """Resolve ``self.project_id`` to its numeric project number.
+
+        The Dataplex ``@dataplex`` entry id for a glossary term must be
+        expressed with the project number; the project id is rejected
+        with HTTP 400 ``Entry ID must contain project number``.
+        Lazily cached per publisher instance.
+        """
+        if self._project_number_cache:
+            return self._project_number_cache
+        if self.project_id.isdigit():
+            self._project_number_cache = self.project_id
+            return self._project_number_cache
+        url = (
+            "https://cloudresourcemanager.googleapis.com/v1/projects/"
+            f"{self.project_id}"
+        )
+        try:
+            resp = self._rest("GET", url)
+        except requests.RequestException as exc:
+            logger.warning(
+                "project-number lookup for %s failed: %s", self.project_id, exc,
+            )
+            self._project_number_cache = self.project_id
+            return self._project_number_cache
+        if resp.status_code == 200:
+            data = resp.json() if resp.content else {}
+            number = str(data.get("projectNumber") or "").strip()
+            self._project_number_cache = number or self.project_id
+            return self._project_number_cache
+        logger.warning(
+            "project-number lookup for %s returned HTTP %d: %s",
+            self.project_id, resp.status_code, resp.text[:200],
+        )
+        self._project_number_cache = self.project_id
+        return self._project_number_cache
 
     def _rest(
         self,
