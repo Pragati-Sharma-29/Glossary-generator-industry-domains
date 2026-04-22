@@ -145,6 +145,7 @@ table.mappings th, table.mappings td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 table.mappings th {
   color: var(--muted);
