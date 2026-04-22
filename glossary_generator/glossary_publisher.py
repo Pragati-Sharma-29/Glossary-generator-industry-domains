@@ -92,13 +92,21 @@ class GlossaryPublisher:
         an EntryReference.name with HTTP 400 "invalid format". Glossary
         terms are catalogued in the system-managed ``@dataplex`` entry
         group at location ``global``; references must be the entry form.
+
+        The id portion after ``/entries/`` keeps **literal slashes** —
+        URL-encoding them produces the 404 ``Entry
+        projects/%2F…%2Fterms%2F<slug> does not exist`` that Dataplex
+        emits when the encoded form doesn't resolve to a real entry.
+        Per the manage-glossaries reference the full name is:
+        ``projects/{p}/locations/global/entryGroups/@dataplex/entries/
+        projects/{p}/locations/global/glossaries/{g}/terms/{t}``.
         """
         term_resource = self._term_name(term_id)
         entry_group = (
             f"projects/{self.project_id}/locations/global"
             f"/entryGroups/@dataplex"
         )
-        return f"{entry_group}/entries/{quote(term_resource, safe='')}"
+        return f"{entry_group}/entries/{term_resource}"
 
     def _bigquery_entry_group(self) -> str:
         return (
