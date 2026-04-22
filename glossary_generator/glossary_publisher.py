@@ -26,7 +26,6 @@ import re
 import time
 import uuid
 from typing import Any, Optional
-from urllib.parse import quote
 
 import google.auth
 import google.auth.transport.requests
@@ -64,6 +63,18 @@ class GlossaryPublisher:
         self._client = client  # unused; Dataplex calls go through REST
         self._creds = None
         self._session = requests.Session()
+        # {display_name_lower: term_id} — seeded from the glossary on
+        # publish(), then updated in-place as _ensure_term creates new
+        # terms. Downstream link creation resolves each term display
+        # name through this map so a pre-existing term (manually created,
+        # or created by a prior run with a different slug) is reused
+        # instead of duplicated.
+        self._term_id_by_display: dict[str, str] = {}
+        # Project *number* lazily resolved via cloudresourcemanager. The
+        # @dataplex entry id for a glossary term must carry the project
+        # NUMBER ("Entry ID must contain project number"), even though
+        # the glossary/term resource names themselves use the project id.
+        self._project_number_cache: Optional[str] = None
 
     # ─────────────────────────────────────────────────────────── resource names
 
@@ -81,17 +92,27 @@ class GlossaryPublisher:
     def _term_entry_name(self, term_id: str) -> str:
         """Entry-form name of a glossary term (used in EntryReferences).
 
-        Dataplex rejects a raw ``projects/…/glossaries/{g}/terms/{t}`` as
-        an EntryReference.name with HTTP 400 "invalid format". Glossary
-        terms are catalogued in the system-managed ``@dataplex`` entry
-        group at location ``global``; references must be the entry form.
+        Dataplex's @dataplex entry id for a glossary term must be the
+        full term resource name expressed with the project **number**,
+        not the project id. The component path is kept **unencoded**:
+
+          projects/{p}/locations/global/entryGroups/@dataplex/entries/
+          projects/{PROJECT_NUMBER}/locations/global/glossaries/{g}/terms/{t}
+
+        A URL-encoded id yields HTTP 404 ``Entry projects%2F…%2Fterms%2F…
+        does not exist``; a project-id id yields HTTP 400 ``Entry ID
+        must contain project number``.
         """
-        term_resource = self._term_name(term_id)
+        project_num = self._project_number()
+        term_resource = (
+            f"projects/{project_num}/locations/{self.location}"
+            f"/glossaries/{self.glossary_id}/terms/{term_id}"
+        )
         entry_group = (
             f"projects/{self.project_id}/locations/global"
             f"/entryGroups/@dataplex"
         )
-        return f"{entry_group}/entries/{quote(term_resource, safe='')}"
+        return f"{entry_group}/entries/{term_resource}"
 
     def _bigquery_entry_group(self) -> str:
         return (
@@ -102,11 +123,15 @@ class GlossaryPublisher:
     def _bigquery_column_entry(self, dataset_id: str, table_id: str) -> str:
         """Resource name of the BigQuery table entry.
 
-        Dataplex's auto-catalogued ``@bigquery`` entries use the URL-encoded
-        form of ``bigquery.googleapis.com/projects/<p>/datasets/<d>/tables/<t>``
-        as the entry id — **no** leading ``//``. Using ``//bigquery.googleapis.com``
-        here produced an HTTP 400 ``entry name reference invalid`` from
-        Dataplex.
+        The auto-catalogued ``@bigquery`` entry id for a BigQuery table
+        is the unencoded form
+
+          bigquery.googleapis.com/projects/{PROJECT_ID}/datasets/{d}/tables/{t}
+
+        — literal slashes (URL-encoding them yields HTTP 404 "Entry …
+        does not exist"), no leading ``//``, and the **project id**
+        (not the project number — that's only the @dataplex rule for
+        glossary term entries).
 
         The column itself is referenced via the ``path`` field on the
         ``EntryReference`` (``Schema.<column_name>``).
@@ -115,7 +140,7 @@ class GlossaryPublisher:
             f"bigquery.googleapis.com/projects/{self.project_id}"
             f"/datasets/{dataset_id}/tables/{table_id}"
         )
-        return f"{self._bigquery_entry_group()}/entries/{quote(bq_resource, safe='')}"
+        return f"{self._bigquery_entry_group()}/entries/{bq_resource}"
 
     @staticmethod
     def _slug(display_name: str) -> str:
@@ -130,6 +155,43 @@ class GlossaryPublisher:
         if not self._creds.valid:
             self._creds.refresh(google.auth.transport.requests.Request())
         return self._creds.token
+
+    def _project_number(self) -> str:
+        """Resolve ``self.project_id`` to its numeric project number.
+
+        The Dataplex ``@dataplex`` entry id for a glossary term must be
+        expressed with the project number; the project id is rejected
+        with HTTP 400 ``Entry ID must contain project number``.
+        Lazily cached per publisher instance.
+        """
+        if self._project_number_cache:
+            return self._project_number_cache
+        if self.project_id.isdigit():
+            self._project_number_cache = self.project_id
+            return self._project_number_cache
+        url = (
+            "https://cloudresourcemanager.googleapis.com/v1/projects/"
+            f"{self.project_id}"
+        )
+        try:
+            resp = self._rest("GET", url)
+        except requests.RequestException as exc:
+            logger.warning(
+                "project-number lookup for %s failed: %s", self.project_id, exc,
+            )
+            self._project_number_cache = self.project_id
+            return self._project_number_cache
+        if resp.status_code == 200:
+            data = resp.json() if resp.content else {}
+            number = str(data.get("projectNumber") or "").strip()
+            self._project_number_cache = number or self.project_id
+            return self._project_number_cache
+        logger.warning(
+            "project-number lookup for %s returned HTTP %d: %s",
+            self.project_id, resp.status_code, resp.text[:200],
+        )
+        self._project_number_cache = self.project_id
+        return self._project_number_cache
 
     def _rest(
         self,
@@ -164,7 +226,7 @@ class GlossaryPublisher:
 
         ``term_links`` is an optional list of dicts shaped like
         ``{"parent": <display>, "child": <display>, "kind":
-        "synonymous" | "related"}`` used to emit structured entry links
+        "synonym" | "related"}`` used to emit structured entry links
         between two terms in this glossary (e.g. when the operator has
         promoted a synonym into its own standalone term).
 
@@ -184,6 +246,11 @@ class GlossaryPublisher:
         if not self._ensure_glossary(report):
             return report
 
+        # 0a) Seed the display→id cache with whatever terms already live
+        #     in the glossary so mappings and term-links resolve to the
+        #     existing term id rather than duplicating it under our slug.
+        self._term_id_by_display = self._list_existing_terms()
+
         # 1) Ensure each referenced term exists.
         for term in suggestion.terms:
             self._ensure_term(term, report)
@@ -195,7 +262,7 @@ class GlossaryPublisher:
             )
             report["mappings"].append(record)
 
-        # 3) Create term-to-term entry links (synonymous / related).
+        # 3) Create term-to-term entry links (synonym / related).
         for link in term_links or []:
             report["term_links"].append(self._create_term_link(link))
 
@@ -351,12 +418,76 @@ class GlossaryPublisher:
 
     # ──────────────────────────────────────────────────── term creation
 
+    def _list_existing_terms(self) -> dict[str, str]:
+        """Page through the glossary's terms, returning ``{display_lower: id}``.
+
+        Fail-soft: network or HTTP errors yield an empty map (publish
+        continues, falling back to slug-derived ids).
+        """
+        if self.dry_run:
+            return {}
+
+        url = f"{_DATAPLEX_REST}/{self.glossary_name}/terms"
+        result: dict[str, str] = {}
+        page_token: Optional[str] = None
+        while True:
+            params: dict[str, Any] = {"pageSize": 500}
+            if page_token:
+                params["pageToken"] = page_token
+            try:
+                resp = self._rest("GET", url, params=params)
+            except requests.RequestException as exc:
+                logger.warning("list_glossary_terms network error: %s", exc)
+                return result
+            if resp.status_code != 200:
+                logger.warning(
+                    "list_glossary_terms HTTP %d: %s",
+                    resp.status_code, resp.text[:200],
+                )
+                return result
+            data = resp.json() if resp.content else {}
+            for term in data.get("terms", []) or []:
+                display = (term.get("displayName") or "").strip().lower()
+                term_id = (term.get("name") or "").rsplit("/", 1)[-1]
+                if display and term_id:
+                    result[display] = term_id
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return result
+
+    def _resolve_term_id(self, display_name: str) -> str:
+        """Return the cached term id for ``display_name``, or a fresh slug.
+
+        Keeps downstream link creation pointing at whichever id the
+        glossary actually uses — pre-existing ones keep their id; new
+        ones get our deterministic slug (inserted into the cache by
+        ``_ensure_term``).
+        """
+        key = display_name.strip().lower()
+        return self._term_id_by_display.get(key) or self._slug(display_name)
+
     def _ensure_term(self, term: TermSuggestion, report: dict) -> None:
+        key = term.display_name.strip().lower()
+        if self.dry_run:
+            term_id = self._term_id_by_display.get(key) or self._slug(term.display_name)
+            self._term_id_by_display[key] = term_id
+            report["created_terms"].append(
+                {"name": self._term_name(term_id), "dry_run": True},
+            )
+            return
+
+        # Term already present under some id (ours or pre-existing) —
+        # record it as existing and let downstream link creation reuse it.
+        existing_id = self._term_id_by_display.get(key)
+        if existing_id:
+            report["skipped_terms"].append(
+                {"name": self._term_name(existing_id), "reason": "exists"},
+            )
+            return
+
         term_id = self._slug(term.display_name)
         full_name = self._term_name(term_id)
-        if self.dry_run:
-            report["created_terms"].append({"name": full_name, "dry_run": True})
-            return
 
         url = f"{_DATAPLEX_REST}/{self.glossary_name}/terms"
         body = {
@@ -376,9 +507,16 @@ class GlossaryPublisher:
             return
 
         if resp.status_code in (200, 201):
+            self._term_id_by_display[key] = term_id
             report["created_terms"].append({"name": full_name})
         elif resp.status_code == 409:
-            report["skipped_terms"].append({"name": full_name, "reason": "exists"})
+            # Raced against another publisher (or our cache was stale).
+            # Refresh from the server so link creation sees the real id.
+            self._term_id_by_display = self._list_existing_terms()
+            resolved_id = self._term_id_by_display.get(key, term_id)
+            report["skipped_terms"].append(
+                {"name": self._term_name(resolved_id), "reason": "exists"},
+            )
         elif resp.status_code == 404:
             logger.error(
                 "create_glossary_term 404 for %s (URL=%s): %s",
@@ -411,7 +549,10 @@ class GlossaryPublisher:
     def _create_entry_link(
         self, mapping: ColumnMapping, *, dataset_id: str
     ) -> dict:
-        term_slug = self._slug(mapping.term_display_name)
+        # Resolve to the actual glossary term id (pre-existing, or the
+        # one we just created) so column→term links always point at the
+        # real term, not a duplicate minted from display-name slugging.
+        term_slug = self._resolve_term_id(mapping.term_display_name)
         # Reference the term in its entry form (inside @dataplex), not
         # its raw glossary-term resource path — Dataplex 400s on the
         # latter as "invalid EntryReference format".
@@ -490,43 +631,35 @@ class GlossaryPublisher:
     # ──────────────────────────────────────────────────── term-to-term links
 
     def _create_term_link(self, link: dict) -> dict:
-        """Create a ``synonymous`` or ``related`` entry link between two terms.
+        """Create a ``synonym`` or ``related`` entry link between two terms.
 
-        Both endpoints are terms inside ``self.glossary_name`` (i.e. the
-        same glossary we just created them in). Dataplex requires the
-        parent of an EntryLink resource to be an EntryGroup; term entries
-        live in the system-managed ``@dataplex-glossary`` entry group at
-        the glossary's own location, so the link is written there.
+        Per the Dataplex ``manage-glossaries`` reference, term↔term links
+        are written under the system-managed ``@dataplex`` entry group
+        in the same project and location as the glossary itself — not
+        ``@dataplex-glossary``, which Dataplex rejects with HTTP 400
+        ``entry group @dataplex-glossary is not allowed``.
 
         ``link`` shape: ``{"parent": <display>, "child": <display>,
-        "kind": "synonymous" | "related"}``.
+        "kind": "synonym" | "related"}``.
         """
         parent_display = link["parent"]
         child_display = link["child"]
         kind = link.get("kind", "related")
-        parent_slug = self._slug(parent_display)
-        child_slug = self._slug(child_display)
-        # Term-to-term entry links also reference terms via their
-        # entry form, same reasoning as _create_entry_link above.
+        # Same reuse rule as column→term links: point at whichever id
+        # the glossary actually holds for this display name.
+        parent_slug = self._resolve_term_id(parent_display)
+        child_slug = self._resolve_term_id(child_display)
         parent_resource = self._term_entry_name(parent_slug)
         child_resource = self._term_entry_name(child_slug)
 
-        # Dataplex publishes two standard system entry link types for
-        # glossary relationships: ``synonym`` and ``related`` (both
-        # undirected, term↔term). ``kind`` on the link request is
-        # either "synonym" or "related"; map it straight through.
-        # Anything else falls back to ``related``.
         safe_kind = kind if kind in ("synonym", "related") else "related"
         link_type = (
             f"projects/dataplex-types/locations/global/entryLinkTypes/{safe_kind}"
         )
-        # Deterministic id so a re-publish with the same (kind, parent,
-        # child) triple hits Dataplex 409 → "exists" rather than creating
-        # a duplicate link every time.
         link_id = _deterministic_link_id(safe_kind, parent_slug, child_slug)
         entry_group = (
             f"projects/{self.project_id}/locations/{self.location}"
-            f"/entryGroups/@dataplex-glossary"
+            f"/entryGroups/@dataplex"
         )
         entry_link_name = f"{entry_group}/entryLinks/{link_id}"
 
