@@ -110,7 +110,7 @@ open `enterprise-glossary`. You should see:
 * Clicking a term shows the BigQuery columns linked to it via
   `definition` entry links.
 * Promoted synonyms/related appear as their own terms in the same
-  glossary, linked back to the parent via `synonymous` / `related`
+  glossary, linked back to the parent via `synonym` / `related`
   entry links.
 
 ### Tips for better results
@@ -384,7 +384,11 @@ exists / error). Session state is held in-process; swap `_SESSIONS` in
 
 * **Terms** are created (or skipped as "exists") under the configured
   glossary. A promoted synonym/related term goes into the **same
-  glossary** as the canonical one.
+  glossary** as the canonical one. Before creating, the publisher
+  lists the glossary's existing terms and matches by display name —
+  an already-present term (including one created manually under a
+  different id) is reused, and new column↔term / term↔term links
+  point at its existing id instead of minting a duplicate term.
 * **Synonyms and related terms** of any created term are also folded
   into that term's description (as `**Also known as:** …` and
   `**Related:** …`) so they're visible in the Dataplex UI even when
