@@ -164,7 +164,7 @@ class GlossaryPublisher:
 
         ``term_links`` is an optional list of dicts shaped like
         ``{"parent": <display>, "child": <display>, "kind":
-        "synonymous" | "related"}`` used to emit structured entry links
+        "synonym" | "related"}`` used to emit structured entry links
         between two terms in this glossary (e.g. when the operator has
         promoted a synonym into its own standalone term).
 
@@ -195,7 +195,7 @@ class GlossaryPublisher:
             )
             report["mappings"].append(record)
 
-        # 3) Create term-to-term entry links (synonymous / related).
+        # 3) Create term-to-term entry links (synonym / related).
         for link in term_links or []:
             report["term_links"].append(self._create_term_link(link))
 
@@ -490,43 +490,33 @@ class GlossaryPublisher:
     # ──────────────────────────────────────────────────── term-to-term links
 
     def _create_term_link(self, link: dict) -> dict:
-        """Create a ``synonymous`` or ``related`` entry link between two terms.
+        """Create a ``synonym`` or ``related`` entry link between two terms.
 
-        Both endpoints are terms inside ``self.glossary_name`` (i.e. the
-        same glossary we just created them in). Dataplex requires the
-        parent of an EntryLink resource to be an EntryGroup; term entries
-        live in the system-managed ``@dataplex-glossary`` entry group at
-        the glossary's own location, so the link is written there.
+        Per the Dataplex ``manage-glossaries`` reference, term↔term links
+        are written under the system-managed ``@dataplex`` entry group
+        in the same project and location as the glossary itself — not
+        ``@dataplex-glossary``, which Dataplex rejects with HTTP 400
+        ``entry group @dataplex-glossary is not allowed``.
 
         ``link`` shape: ``{"parent": <display>, "child": <display>,
-        "kind": "synonymous" | "related"}``.
+        "kind": "synonym" | "related"}``.
         """
         parent_display = link["parent"]
         child_display = link["child"]
         kind = link.get("kind", "related")
         parent_slug = self._slug(parent_display)
         child_slug = self._slug(child_display)
-        # Term-to-term entry links also reference terms via their
-        # entry form, same reasoning as _create_entry_link above.
         parent_resource = self._term_entry_name(parent_slug)
         child_resource = self._term_entry_name(child_slug)
 
-        # Dataplex publishes two standard system entry link types for
-        # glossary relationships: ``synonym`` and ``related`` (both
-        # undirected, term↔term). ``kind`` on the link request is
-        # either "synonym" or "related"; map it straight through.
-        # Anything else falls back to ``related``.
         safe_kind = kind if kind in ("synonym", "related") else "related"
         link_type = (
             f"projects/dataplex-types/locations/global/entryLinkTypes/{safe_kind}"
         )
-        # Deterministic id so a re-publish with the same (kind, parent,
-        # child) triple hits Dataplex 409 → "exists" rather than creating
-        # a duplicate link every time.
         link_id = _deterministic_link_id(safe_kind, parent_slug, child_slug)
         entry_group = (
             f"projects/{self.project_id}/locations/{self.location}"
-            f"/entryGroups/@dataplex-glossary"
+            f"/entryGroups/@dataplex"
         )
         entry_link_name = f"{entry_group}/entryLinks/{link_id}"
 

@@ -327,8 +327,8 @@ token the build uses seed_docs only and still produces a usable corpus
    - `POST /glossaries/{g}/terms` — one per approved + promoted term
    - `POST /entryGroups/@bigquery/entryLinks` — one `definition` link
      per approved column↔term mapping
-   - `POST /entryGroups/@dataplex-glossary/entryLinks` — one
-     `synonymous` or `related` link per promoted-term relationship,
+   - `POST /entryGroups/@dataplex/entryLinks` — one
+     `synonym` or `related` link per promoted-term relationship,
      wiring the new term to its parent structurally
 
 The result page lists all three sections with per-row status (created /
@@ -392,9 +392,9 @@ exists / error). Session state is held in-process; swap `_SESSIONS` in
 * **Column↔term links** are `definition`-type EntryLinks in the
   system-managed `@bigquery` entry group.
 * **Term↔term links** (when the operator promotes synonyms/related)
-  are `synonymous`- or `related`-type EntryLinks in the system-managed
-  `@dataplex-glossary` entry group, keeping the relationship
-  structurally queryable.
+  are `synonym`- or `related`-type EntryLinks in the system-managed
+  `@dataplex` entry group, keeping the relationship structurally
+  queryable.
 
 ## Default region: `europe-west4`
 
