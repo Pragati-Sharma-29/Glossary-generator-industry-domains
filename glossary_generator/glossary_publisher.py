@@ -123,21 +123,21 @@ class GlossaryPublisher:
     def _bigquery_column_entry(self, dataset_id: str, table_id: str) -> str:
         """Resource name of the BigQuery table entry.
 
-        Per the Dataplex manage-glossaries reference the auto-catalogued
-        ``@bigquery`` entry id is the unencoded form:
+        The auto-catalogued ``@bigquery`` entry id for a BigQuery table
+        is the unencoded form
 
-          bigquery.googleapis.com/projects/{PROJECT_NUMBER}/datasets/{d}/tables/{t}
+          bigquery.googleapis.com/projects/{PROJECT_ID}/datasets/{d}/tables/{t}
 
-        URL-encoding those slashes, or substituting the project id for
-        the project number, yields HTTP 404
-        ``Entry … does not exist`` even when the table is catalogued.
+        — literal slashes (URL-encoding them yields HTTP 404 "Entry …
+        does not exist"), no leading ``//``, and the **project id**
+        (not the project number — that's only the @dataplex rule for
+        glossary term entries).
 
         The column itself is referenced via the ``path`` field on the
         ``EntryReference`` (``Schema.<column_name>``).
         """
-        project_num = self._project_number()
         bq_resource = (
-            f"bigquery.googleapis.com/projects/{project_num}"
+            f"bigquery.googleapis.com/projects/{self.project_id}"
             f"/datasets/{dataset_id}/tables/{table_id}"
         )
         return f"{self._bigquery_entry_group()}/entries/{bq_resource}"
