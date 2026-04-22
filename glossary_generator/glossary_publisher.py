@@ -64,6 +64,13 @@ class GlossaryPublisher:
         self._client = client  # unused; Dataplex calls go through REST
         self._creds = None
         self._session = requests.Session()
+        # {display_name_lower: term_id} — seeded from the glossary on
+        # publish(), then updated in-place as _ensure_term creates new
+        # terms. Downstream link creation resolves each term display
+        # name through this map so a pre-existing term (manually created,
+        # or created by a prior run with a different slug) is reused
+        # instead of duplicated.
+        self._term_id_by_display: dict[str, str] = {}
 
     # ─────────────────────────────────────────────────────────── resource names
 
@@ -183,6 +190,11 @@ class GlossaryPublisher:
         #    404 on a glossary-id that the operator typed but never created.
         if not self._ensure_glossary(report):
             return report
+
+        # 0a) Seed the display→id cache with whatever terms already live
+        #     in the glossary so mappings and term-links resolve to the
+        #     existing term id rather than duplicating it under our slug.
+        self._term_id_by_display = self._list_existing_terms()
 
         # 1) Ensure each referenced term exists.
         for term in suggestion.terms:
@@ -351,12 +363,76 @@ class GlossaryPublisher:
 
     # ──────────────────────────────────────────────────── term creation
 
+    def _list_existing_terms(self) -> dict[str, str]:
+        """Page through the glossary's terms, returning ``{display_lower: id}``.
+
+        Fail-soft: network or HTTP errors yield an empty map (publish
+        continues, falling back to slug-derived ids).
+        """
+        if self.dry_run:
+            return {}
+
+        url = f"{_DATAPLEX_REST}/{self.glossary_name}/terms"
+        result: dict[str, str] = {}
+        page_token: Optional[str] = None
+        while True:
+            params: dict[str, Any] = {"pageSize": 500}
+            if page_token:
+                params["pageToken"] = page_token
+            try:
+                resp = self._rest("GET", url, params=params)
+            except requests.RequestException as exc:
+                logger.warning("list_glossary_terms network error: %s", exc)
+                return result
+            if resp.status_code != 200:
+                logger.warning(
+                    "list_glossary_terms HTTP %d: %s",
+                    resp.status_code, resp.text[:200],
+                )
+                return result
+            data = resp.json() if resp.content else {}
+            for term in data.get("terms", []) or []:
+                display = (term.get("displayName") or "").strip().lower()
+                term_id = (term.get("name") or "").rsplit("/", 1)[-1]
+                if display and term_id:
+                    result[display] = term_id
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return result
+
+    def _resolve_term_id(self, display_name: str) -> str:
+        """Return the cached term id for ``display_name``, or a fresh slug.
+
+        Keeps downstream link creation pointing at whichever id the
+        glossary actually uses — pre-existing ones keep their id; new
+        ones get our deterministic slug (inserted into the cache by
+        ``_ensure_term``).
+        """
+        key = display_name.strip().lower()
+        return self._term_id_by_display.get(key) or self._slug(display_name)
+
     def _ensure_term(self, term: TermSuggestion, report: dict) -> None:
+        key = term.display_name.strip().lower()
+        if self.dry_run:
+            term_id = self._term_id_by_display.get(key) or self._slug(term.display_name)
+            self._term_id_by_display[key] = term_id
+            report["created_terms"].append(
+                {"name": self._term_name(term_id), "dry_run": True},
+            )
+            return
+
+        # Term already present under some id (ours or pre-existing) —
+        # record it as existing and let downstream link creation reuse it.
+        existing_id = self._term_id_by_display.get(key)
+        if existing_id:
+            report["skipped_terms"].append(
+                {"name": self._term_name(existing_id), "reason": "exists"},
+            )
+            return
+
         term_id = self._slug(term.display_name)
         full_name = self._term_name(term_id)
-        if self.dry_run:
-            report["created_terms"].append({"name": full_name, "dry_run": True})
-            return
 
         url = f"{_DATAPLEX_REST}/{self.glossary_name}/terms"
         body = {
@@ -376,9 +452,16 @@ class GlossaryPublisher:
             return
 
         if resp.status_code in (200, 201):
+            self._term_id_by_display[key] = term_id
             report["created_terms"].append({"name": full_name})
         elif resp.status_code == 409:
-            report["skipped_terms"].append({"name": full_name, "reason": "exists"})
+            # Raced against another publisher (or our cache was stale).
+            # Refresh from the server so link creation sees the real id.
+            self._term_id_by_display = self._list_existing_terms()
+            resolved_id = self._term_id_by_display.get(key, term_id)
+            report["skipped_terms"].append(
+                {"name": self._term_name(resolved_id), "reason": "exists"},
+            )
         elif resp.status_code == 404:
             logger.error(
                 "create_glossary_term 404 for %s (URL=%s): %s",
@@ -411,7 +494,10 @@ class GlossaryPublisher:
     def _create_entry_link(
         self, mapping: ColumnMapping, *, dataset_id: str
     ) -> dict:
-        term_slug = self._slug(mapping.term_display_name)
+        # Resolve to the actual glossary term id (pre-existing, or the
+        # one we just created) so column→term links always point at the
+        # real term, not a duplicate minted from display-name slugging.
+        term_slug = self._resolve_term_id(mapping.term_display_name)
         # Reference the term in its entry form (inside @dataplex), not
         # its raw glossary-term resource path — Dataplex 400s on the
         # latter as "invalid EntryReference format".
@@ -504,8 +590,10 @@ class GlossaryPublisher:
         parent_display = link["parent"]
         child_display = link["child"]
         kind = link.get("kind", "related")
-        parent_slug = self._slug(parent_display)
-        child_slug = self._slug(child_display)
+        # Same reuse rule as column→term links: point at whichever id
+        # the glossary actually holds for this display name.
+        parent_slug = self._resolve_term_id(parent_display)
+        child_slug = self._resolve_term_id(child_display)
         parent_resource = self._term_entry_name(parent_slug)
         child_resource = self._term_entry_name(child_slug)
 
