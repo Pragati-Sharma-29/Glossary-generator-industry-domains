@@ -172,7 +172,7 @@
          glossary <code>{{ glossary_id }}</code>.
          Any ticked synonyms / related terms will also be created as
          standalone glossary terms.</p>
-      <button type="submit" class="primary">Publish approved mappings</button>
+      <button type="submit" class="primary" id="publish-btn">Publish approved mappings</button>
     {% else %}
       <p class="warning">No glossary id set — go back and fill it in to publish.</p>
       <a href="/" class="button">Back</a>
@@ -181,11 +181,39 @@
   </section>
 </form>
 
+<div id="publish-loader" class="loader-overlay" hidden aria-live="polite" aria-busy="true">
+  <div class="loader-box">
+    <div class="spinner"></div>
+    <h3>Publishing to Dataplex</h3>
+    <p>
+      Creating terms, writing column↔term links, and wiring promoted
+      synonyms / related terms. This usually takes 10–40 seconds
+      depending on how many mappings you approved.
+    </p>
+  </div>
+</div>
+
 <script>
   function setAll(state) {
     document
       .querySelectorAll('input[name="approved_mapping"]')
       .forEach(cb => cb.checked = state);
+  }
+
+  // Show the loading overlay when the publish form submits and block
+  // repeat clicks. The browser still navigates to /publish; the
+  // overlay clears with the page when the response loads.
+  const publishForm   = document.getElementById("publish-form");
+  const publishBtn    = document.getElementById("publish-btn");
+  const publishLoader = document.getElementById("publish-loader");
+  if (publishForm && publishLoader) {
+    publishForm.addEventListener("submit", () => {
+      if (publishBtn) {
+        publishBtn.disabled = true;
+        publishBtn.textContent = "Publishing…";
+      }
+      publishLoader.hidden = false;
+    });
   }
 </script>
 {% endblock %}
