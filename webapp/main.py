@@ -431,6 +431,7 @@ async def suggest(
             "suggestion": result["suggestion"],
             "detected_industry": detected,
             "tables_without_scans": result.get("tables_without_scans", []),
+            "graph_data": _graph_data_from_suggestion(result["suggestion"]),
         },
     )
     # Preserve cookie set by _get_or_create_session_id
@@ -528,11 +529,142 @@ async def publish(
             "total_count": len(all_mappings),
             "glossary_id": cfg["glossary_id"],
             "project_id": cfg["project_id"],
+            "graph_data": _graph_data_from_report(report),
         },
     )
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
+
+
+def _graph_data_from_suggestion(suggestion) -> dict:
+    """Build a vis-network ``{nodes, edges}`` payload from a suggestion.
+
+    Three layers: **term ↔ table — column**. Edges carry a ``group`` so the
+    renderer can colour them uniformly:
+
+      - ``definition``   column → term (from mappings)
+      - ``contains``     column — table (dashed)
+      - ``synonym``      term ↔ term (from TermSuggestion.synonyms)
+      - ``related``      term ↔ term (from TermSuggestion.related_terms)
+
+    Synonym / related targets that aren't among ``suggestion.terms`` are
+    rendered as dim placeholder nodes (group ``term-ref``) so the
+    relationship is still visible before the operator promotes them.
+    """
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    seen: set[str] = set()
+
+    def add_node(node_id: str, label: str, group: str, **extra) -> None:
+        if node_id in seen:
+            return
+        seen.add(node_id)
+        node = {"id": node_id, "label": label, "group": group}
+        node.update(extra)
+        nodes.append(node)
+
+    term_ids: dict[str, str] = {}
+    for i, term in enumerate(suggestion.terms or []):
+        node_id = f"term:{i}"
+        term_ids[term.display_name.strip().lower()] = node_id
+        add_node(
+            node_id, term.display_name, "term",
+            title=(term.definition or "")[:240],
+        )
+
+    for m in suggestion.mappings or []:
+        table_id = f"table:{m.table_id}"
+        col_id = f"col:{m.table_id}.{m.column_name}"
+        add_node(table_id, m.table_id, "table")
+        add_node(col_id, m.column_name, "column", title=f"{m.table_id}.{m.column_name}")
+        edges.append({"from": col_id, "to": table_id, "group": "contains"})
+        tid = term_ids.get(m.term_display_name.strip().lower())
+        if not tid:
+            tid = f"term:{m.term_display_name}"
+            term_ids[m.term_display_name.strip().lower()] = tid
+            add_node(tid, m.term_display_name, "term")
+        edges.append({"from": col_id, "to": tid, "group": "definition"})
+
+    for i, term in enumerate(suggestion.terms or []):
+        src_id = term_ids[term.display_name.strip().lower()]
+        for kind, items in (("synonym", term.synonyms or []),
+                            ("related", term.related_terms or [])):
+            for ref in items:
+                name = ref.get("name") if isinstance(ref, dict) else str(ref)
+                name = (name or "").strip()
+                if not name:
+                    continue
+                dst_id = term_ids.get(name.lower())
+                if not dst_id:
+                    dst_id = f"ref:{name.lower()}"
+                    term_ids[name.lower()] = dst_id
+                    add_node(dst_id, name, "term-ref")
+                edges.append({"from": src_id, "to": dst_id, "group": kind})
+
+    return {"nodes": nodes, "edges": edges}
+
+
+def _graph_data_from_report(report: dict) -> dict:
+    """Build the same graph shape from a publish report.
+
+    Uses ``report.mappings`` (column → term) and ``report.term_links``
+    (term ↔ term) — the two collections that actually got written to
+    Dataplex. Failed links are coloured as ``error`` edges so the
+    operator can see which ones didn't land.
+    """
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    seen: set[str] = set()
+
+    def add_node(node_id: str, label: str, group: str, **extra) -> None:
+        if node_id in seen:
+            return
+        seen.add(node_id)
+        node = {"id": node_id, "label": label, "group": group}
+        node.update(extra)
+        nodes.append(node)
+
+    for m in report.get("mappings") or []:
+        tname = (m.get("term") or "").strip()
+        table = (m.get("table") or "").strip()
+        col = (m.get("column") or "").strip()
+        if not (tname and table and col):
+            continue
+        tid = f"term:{tname.lower()}"
+        table_id = f"table:{table}"
+        col_id = f"col:{table}.{col}"
+        add_node(tid, tname, "term")
+        add_node(table_id, table, "table")
+        add_node(col_id, col, "column", title=f"{table}.{col}")
+        edges.append({"from": col_id, "to": table_id, "group": "contains"})
+        status = str(m.get("status") or "")
+        is_error = status.startswith("error") or status.startswith("HTTP")
+        edges.append({
+            "from": col_id, "to": tid,
+            "group": "error" if is_error else "definition",
+            "title": status or "created",
+        })
+
+    for link in report.get("term_links") or []:
+        parent = (link.get("parent") or "").strip()
+        child = (link.get("child") or "").strip()
+        kind = link.get("kind") or "related"
+        if not (parent and child):
+            continue
+        pid = f"term:{parent.lower()}"
+        cid = f"term:{child.lower()}"
+        add_node(pid, parent, "term")
+        add_node(cid, child, "term")
+        status = str(link.get("status") or "")
+        is_error = status.startswith("error") or status.startswith("HTTP")
+        edges.append({
+            "from": pid, "to": cid,
+            "group": "error" if is_error else kind,
+            "title": status or "created",
+        })
+
+    return {"nodes": nodes, "edges": edges}
 
 
 def _mapping_from_dict(d: dict) -> ColumnMapping:

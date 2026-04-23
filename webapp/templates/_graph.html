@@ -1,0 +1,75 @@
+{# Reusable graph card: renders `graph_data` ({nodes, edges}) with vis-network.
+
+  Expected context: `graph_data` - a dict like
+    {"nodes": [...], "edges": [...]} where each node has
+    {"id", "label", "group"} and each edge has {"from", "to", "group"}.
+  Groups drive colour (see `groups` map in the init script below).
+#}
+<section class="card graph-card">
+  <details open>
+    <summary><h3 style="display: inline; margin: 0;">Graph view</h3></summary>
+    <p class="meta">
+      <span class="legend-dot legend-term"></span> Term
+      <span class="legend-dot legend-table"></span> Table
+      <span class="legend-dot legend-column"></span> Column
+      &nbsp;·&nbsp;
+      Blue edge = column→term (definition).
+      Grey dashed = table↔column.
+      Green = synonym.
+      Amber = related.
+      Red = publish error.
+    </p>
+    <div id="graph-canvas"></div>
+  </details>
+</section>
+
+<script id="graph-data" type="application/json">{{ graph_data | tojson }}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js"></script>
+<script>
+(function () {
+  const raw = document.getElementById("graph-data").textContent || "{}";
+  const data = JSON.parse(raw);
+  const container = document.getElementById("graph-canvas");
+  if (!container || !Array.isArray(data.nodes) || !data.nodes.length) {
+    if (container) { container.textContent = "No graph data to display."; }
+    return;
+  }
+
+  // Styling by group — keeps the template HTML free of per-edge colour.
+  const edgeStyle = {
+    definition: { color: "#6366f1", arrows: "to",    dashes: false },
+    contains:   { color: "#475569", arrows: "",      dashes: true  },
+    synonym:    { color: "#22c55e", arrows: "",      dashes: false },
+    related:    { color: "#f59e0b", arrows: "",      dashes: true  },
+    error:      { color: "#ef4444", arrows: "to",    dashes: false },
+  };
+  const edges = data.edges.map(e => {
+    const s = edgeStyle[e.group] || edgeStyle.definition;
+    return { ...e, color: { color: s.color }, arrows: s.arrows, dashes: s.dashes };
+  });
+
+  new vis.Network(container,
+    { nodes: new vis.DataSet(data.nodes), edges: new vis.DataSet(edges) },
+    {
+      nodes: {
+        shape: "dot", size: 14,
+        font: { color: "#e6e8ef", size: 13, face: "system-ui" },
+        borderWidth: 1.5,
+      },
+      edges: { smooth: { type: "dynamic" }, width: 1.2 },
+      groups: {
+        term:       { color: { background: "#6366f1", border: "#818cf8" } },
+        "term-ref": { color: { background: "#3a3f5c", border: "#5b6284" },
+                      font: { color: "#c7ccdc" } },
+        table:      { color: { background: "#14b8a6", border: "#2dd4bf" } },
+        column:     { color: { background: "#475569", border: "#64748b" } },
+      },
+      physics: {
+        stabilization: { iterations: 150 },
+        barnesHut: { springLength: 140, gravitationalConstant: -6000 },
+      },
+      interaction: { hover: true, tooltipDelay: 150, navigationButtons: true },
+    },
+  );
+})();
+</script>
