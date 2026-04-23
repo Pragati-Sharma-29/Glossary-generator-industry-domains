@@ -540,16 +540,20 @@ async def publish(
 def _graph_data_from_suggestion(suggestion) -> dict:
     """Build a vis-network ``{nodes, edges}`` payload from a suggestion.
 
+    ``suggestion`` is the dict produced by ``GlossarySuggestion.to_dict()``
+    (the form that reaches the template), not the dataclass — keys
+    ``terms`` and ``mappings`` carry lists of plain dicts.
+
     Three layers: **term ↔ table — column**. Edges carry a ``group`` so the
     renderer can colour them uniformly:
 
       - ``definition``   column → term (from mappings)
       - ``contains``     column — table (dashed)
-      - ``synonym``      term ↔ term (from TermSuggestion.synonyms)
-      - ``related``      term ↔ term (from TermSuggestion.related_terms)
+      - ``synonym``      term ↔ term (from term.synonyms)
+      - ``related``      term ↔ term (from term.related_terms)
 
-    Synonym / related targets that aren't among ``suggestion.terms`` are
-    rendered as dim placeholder nodes (group ``term-ref``) so the
+    Synonym / related targets that aren't themselves in ``suggestion.terms``
+    are rendered as dim placeholder nodes (group ``term-ref``) so the
     relationship is still visible before the operator promotes them.
     """
     nodes: list[dict] = []
@@ -564,32 +568,46 @@ def _graph_data_from_suggestion(suggestion) -> dict:
         node.update(extra)
         nodes.append(node)
 
+    terms = (suggestion or {}).get("terms") or []
+    mappings = (suggestion or {}).get("mappings") or []
+
     term_ids: dict[str, str] = {}
-    for i, term in enumerate(suggestion.terms or []):
+    for i, term in enumerate(terms):
+        display_name = (term.get("display_name") or "").strip()
+        if not display_name:
+            continue
         node_id = f"term:{i}"
-        term_ids[term.display_name.strip().lower()] = node_id
+        term_ids[display_name.lower()] = node_id
         add_node(
-            node_id, term.display_name, "term",
-            title=(term.definition or "")[:240],
+            node_id, display_name, "term",
+            title=(term.get("definition") or "")[:240],
         )
 
-    for m in suggestion.mappings or []:
-        table_id = f"table:{m.table_id}"
-        col_id = f"col:{m.table_id}.{m.column_name}"
-        add_node(table_id, m.table_id, "table")
-        add_node(col_id, m.column_name, "column", title=f"{m.table_id}.{m.column_name}")
+    for m in mappings:
+        table = (m.get("table_id") or "").strip()
+        column = (m.get("column_name") or "").strip()
+        term_name = (m.get("term_display_name") or "").strip()
+        if not (table and column and term_name):
+            continue
+        table_id = f"table:{table}"
+        col_id = f"col:{table}.{column}"
+        add_node(table_id, table, "table")
+        add_node(col_id, column, "column", title=f"{table}.{column}")
         edges.append({"from": col_id, "to": table_id, "group": "contains"})
-        tid = term_ids.get(m.term_display_name.strip().lower())
+        tid = term_ids.get(term_name.lower())
         if not tid:
-            tid = f"term:{m.term_display_name}"
-            term_ids[m.term_display_name.strip().lower()] = tid
-            add_node(tid, m.term_display_name, "term")
+            tid = f"term:{term_name}"
+            term_ids[term_name.lower()] = tid
+            add_node(tid, term_name, "term")
         edges.append({"from": col_id, "to": tid, "group": "definition"})
 
-    for i, term in enumerate(suggestion.terms or []):
-        src_id = term_ids[term.display_name.strip().lower()]
-        for kind, items in (("synonym", term.synonyms or []),
-                            ("related", term.related_terms or [])):
+    for i, term in enumerate(terms):
+        display_name = (term.get("display_name") or "").strip()
+        src_id = term_ids.get(display_name.lower())
+        if not src_id:
+            continue
+        for kind, items in (("synonym", term.get("synonyms") or []),
+                            ("related", term.get("related_terms") or [])):
             for ref in items:
                 name = ref.get("name") if isinstance(ref, dict) else str(ref)
                 name = (name or "").strip()
