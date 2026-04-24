@@ -227,6 +227,12 @@
   }
 
   function focusNode(nodeId) {
+    // Force vis's internal selection to this single node so the
+    // previously-clicked node loses its selection border and the
+    // graph visibly reflects the new focus. Without this the prior
+    // node stayed visually selected even after we dimmed it.
+    network.selectNodes([nodeId], false);
+
     const connectedEdgeIds = new Set(network.getConnectedEdges(nodeId));
     const connectedNodeIds = new Set([nodeId, ...network.getConnectedNodes(nodeId)]);
 
@@ -240,6 +246,9 @@
         color: connectedEdgeIds.has(e.id) ? s.color : rgba(s.color, 0.08),
       });
     });
+    // Force a redraw so the selection-border removal on the prior
+    // node + the new opacity values both land in the next frame.
+    network.redraw();
 
     renderPanel(nodeId, connectedEdgeIds);
   }
