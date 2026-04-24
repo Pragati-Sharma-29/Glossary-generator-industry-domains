@@ -18,8 +18,19 @@
       Green = synonym.
       Amber = related.
       Red = publish error.
+      &nbsp;·&nbsp;
+      <span class="hint">Click a node to focus its relationships.</span>
     </p>
-    <div id="graph-canvas"></div>
+    <div class="graph-wrap">
+      <div id="graph-canvas"></div>
+      <aside id="graph-panel" hidden>
+        <header>
+          <span id="graph-panel-title"></span>
+          <button type="button" id="graph-panel-close" aria-label="Close">×</button>
+        </header>
+        <div id="graph-panel-body"></div>
+      </aside>
+    </div>
   </details>
 </section>
 
@@ -35,21 +46,52 @@
     return;
   }
 
-  // Styling by group — keeps the template HTML free of per-edge colour.
   const edgeStyle = {
-    definition: { color: "#6366f1", arrows: "to",    dashes: false },
-    contains:   { color: "#475569", arrows: "",      dashes: true  },
-    synonym:    { color: "#22c55e", arrows: "",      dashes: false },
-    related:    { color: "#f59e0b", arrows: "",      dashes: true  },
-    error:      { color: "#ef4444", arrows: "to",    dashes: false },
+    definition: { color: "#6366f1", arrows: "to",    dashes: false, label: "Column → term (definition)" },
+    contains:   { color: "#475569", arrows: "",      dashes: true,  label: "Table ↔ column"              },
+    synonym:    { color: "#22c55e", arrows: "",      dashes: false, label: "Synonym"                     },
+    related:    { color: "#f59e0b", arrows: "",      dashes: true,  label: "Related"                     },
+    error:      { color: "#ef4444", arrows: "to",    dashes: false, label: "Publish error"               },
   };
-  const edges = data.edges.map(e => {
+  // Nice human labels from the node-group relative to a clicked node.
+  // The panel groups connected edges by type and shows the OTHER end;
+  // the header for each section depends on the clicked node's group and
+  // the edge's group so it reads naturally (e.g. "Columns mapped here"
+  // when clicking a term vs. "Mapped to term" when clicking a column).
+  function sectionTitle(clickedGroup, edgeGroup, otherGroup) {
+    if (edgeGroup === "definition") {
+      if (clickedGroup === "term") return "Columns mapped here";
+      if (clickedGroup === "column") return "Mapped to term";
+      if (clickedGroup === "table") return "Terms on columns of this table";
+    }
+    if (edgeGroup === "contains") {
+      if (clickedGroup === "table") return "Columns";
+      if (clickedGroup === "column") return "In table";
+    }
+    if (edgeGroup === "synonym") return "Synonym of";
+    if (edgeGroup === "related") return "Related to";
+    if (edgeGroup === "error")  return "Links that failed to publish";
+    return edgeGroup;
+  }
+
+  // Attach explicit ids to edges so we can update them individually.
+  const edgesWithIds = data.edges.map((e, i) => {
     const s = edgeStyle[e.group] || edgeStyle.definition;
-    return { ...e, color: { color: s.color }, arrows: s.arrows, dashes: s.dashes };
+    return {
+      id: e.id || `edge-${i}`,
+      from: e.from, to: e.to, group: e.group,
+      color: { color: s.color, opacity: 1.0 },
+      arrows: s.arrows, dashes: s.dashes,
+      title: e.title,
+    };
   });
 
-  new vis.Network(container,
-    { nodes: new vis.DataSet(data.nodes), edges: new vis.DataSet(edges) },
+  const nodesDs = new vis.DataSet(data.nodes);
+  const edgesDs = new vis.DataSet(edgesWithIds);
+  const nodeById = new Map(data.nodes.map(n => [n.id, n]));
+
+  const network = new vis.Network(container,
+    { nodes: nodesDs, edges: edgesDs },
     {
       nodes: {
         shape: "dot", size: 14,
@@ -71,5 +113,106 @@
       interaction: { hover: true, tooltipDelay: 150, navigationButtons: true },
     },
   );
+
+  const panel      = document.getElementById("graph-panel");
+  const panelTitle = document.getElementById("graph-panel-title");
+  const panelBody  = document.getElementById("graph-panel-body");
+  const panelClose = document.getElementById("graph-panel-close");
+
+  function focusNode(nodeId) {
+    const connectedEdgeIds = new Set(network.getConnectedEdges(nodeId));
+    const connectedNodeIds = new Set([nodeId, ...network.getConnectedNodes(nodeId)]);
+
+    nodesDs.forEach(n => {
+      nodesDs.update({ id: n.id, opacity: connectedNodeIds.has(n.id) ? 1.0 : 0.15 });
+    });
+    edgesDs.forEach(e => {
+      const s = edgeStyle[e.group] || edgeStyle.definition;
+      edgesDs.update({
+        id: e.id,
+        color: { color: s.color, opacity: connectedEdgeIds.has(e.id) ? 1.0 : 0.08 },
+      });
+    });
+
+    renderPanel(nodeId, connectedEdgeIds);
+  }
+
+  function renderPanel(nodeId, connectedEdgeIds) {
+    const node = nodeById.get(nodeId);
+    if (!node) return;
+    panelTitle.innerHTML =
+      `<span class="panel-kind">${escape(node.group)}</span> ${escape(node.label)}`;
+
+    // Group connected edges by edge.group, record the "other" endpoint id.
+    const byGroup = new Map();
+    connectedEdgeIds.forEach(eid => {
+      const edge = edgesDs.get(eid);
+      if (!edge) return;
+      const otherId = edge.from === nodeId ? edge.to : edge.from;
+      const list = byGroup.get(edge.group) || [];
+      list.push(otherId);
+      byGroup.set(edge.group, list);
+    });
+
+    if (!byGroup.size) {
+      panelBody.innerHTML = "<p class=\"panel-empty\">No links for this node.</p>";
+      panel.hidden = false;
+      return;
+    }
+
+    const sections = [];
+    for (const [group, otherIds] of byGroup) {
+      const other = otherIds.map(id => nodeById.get(id)).filter(Boolean);
+      const title = sectionTitle(node.group, group, other[0] ? other[0].group : "");
+      const dot = edgeStyle[group] ? edgeStyle[group].color : "#6366f1";
+      const items = other.map(o =>
+        `<li><span class="legend-dot" style="background:${groupColor(o.group)}"></span>${escape(o.label)}</li>`
+      ).join("");
+      sections.push(
+        `<section>
+           <h4><span class="edge-dot" style="background:${dot}"></span>${escape(title)} (${other.length})</h4>
+           <ul>${items}</ul>
+         </section>`
+      );
+    }
+    panelBody.innerHTML = sections.join("");
+    panel.hidden = false;
+  }
+
+  function groupColor(g) {
+    return ({
+      term: "#6366f1", "term-ref": "#3a3f5c",
+      table: "#14b8a6", column: "#475569",
+    })[g] || "#6366f1";
+  }
+  function escape(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+    })[c]);
+  }
+
+  function clearFocus() {
+    nodesDs.forEach(n => nodesDs.update({ id: n.id, opacity: 1.0 }));
+    edgesDs.forEach(e => {
+      const s = edgeStyle[e.group] || edgeStyle.definition;
+      edgesDs.update({ id: e.id, color: { color: s.color, opacity: 1.0 } });
+    });
+    panel.hidden = true;
+    panelBody.innerHTML = "";
+    panelTitle.textContent = "";
+  }
+
+  network.on("selectNode", params => {
+    if (params.nodes.length) focusNode(params.nodes[0]);
+  });
+  network.on("deselectNode", clearFocus);
+  network.on("click", params => {
+    // Click on empty canvas (no node, no edge) clears the focus.
+    if (!params.nodes.length && !params.edges.length) clearFocus();
+  });
+  panelClose.addEventListener("click", () => {
+    network.unselectAll();
+    clearFocus();
+  });
 })();
 </script>
