@@ -402,6 +402,15 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 #graph-panel-body .panel-empty { color: var(--muted); margin: 6px 0; }
+#graph-panel-body .count-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 0 6px;
+  margin-left: 4px;
+  border-radius: 9px;
+  background: #2a2f3a;
+  color: var(--muted);
+}
 
 .legend-dot {
   display: inline-block;

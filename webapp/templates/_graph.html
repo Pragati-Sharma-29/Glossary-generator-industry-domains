@@ -4,6 +4,11 @@
     {"nodes": [...], "edges": [...]} where each node has
     {"id", "label", "group"} and each edge has {"from", "to", "group"}.
   Groups drive colour (see `groups` map in the init script below).
+
+  Table nodes carry an extra `columns: [{id, name, term_id, ...}]` field.
+  These are not rendered initially — a table's columns appear (with
+  contains + definition edges) when the operator clicks the table; its
+  aggregated definition edge is hidden for the duration of the expansion.
 #}
 <section class="card graph-card">
   <details open>
@@ -19,7 +24,7 @@
       Amber = related.
       Red = publish error.
       &nbsp;·&nbsp;
-      <span class="hint">Click a node to focus its relationships.</span>
+      <span class="hint">Click a table to expand its columns; click any node to focus its links.</span>
     </p>
     <div class="graph-wrap">
       <div id="graph-canvas"></div>
@@ -47,47 +52,47 @@
   }
 
   const edgeStyle = {
-    definition: { color: "#6366f1", arrows: "to",    dashes: false, label: "Column → term (definition)" },
-    contains:   { color: "#475569", arrows: "",      dashes: true,  label: "Table ↔ column"              },
-    synonym:    { color: "#22c55e", arrows: "",      dashes: false, label: "Synonym"                     },
-    related:    { color: "#f59e0b", arrows: "",      dashes: true,  label: "Related"                     },
-    error:      { color: "#ef4444", arrows: "to",    dashes: false, label: "Publish error"               },
+    definition: { color: "#6366f1", arrows: "to", dashes: false },
+    contains:   { color: "#475569", arrows: "",   dashes: true  },
+    synonym:    { color: "#22c55e", arrows: "",   dashes: false },
+    related:    { color: "#f59e0b", arrows: "",   dashes: true  },
+    error:      { color: "#ef4444", arrows: "to", dashes: false },
   };
-  // Nice human labels from the node-group relative to a clicked node.
-  // The panel groups connected edges by type and shows the OTHER end;
-  // the header for each section depends on the clicked node's group and
-  // the edge's group so it reads naturally (e.g. "Columns mapped here"
-  // when clicking a term vs. "Mapped to term" when clicking a column).
-  function sectionTitle(clickedGroup, edgeGroup, otherGroup) {
+
+  function sectionTitle(clickedGroup, edgeGroup) {
     if (edgeGroup === "definition") {
-      if (clickedGroup === "term") return "Columns mapped here";
+      if (clickedGroup === "term")   return "Columns mapped here";
       if (clickedGroup === "column") return "Mapped to term";
-      if (clickedGroup === "table") return "Terms on columns of this table";
+      if (clickedGroup === "table")  return "Terms mapped from this table";
     }
     if (edgeGroup === "contains") {
-      if (clickedGroup === "table") return "Columns";
+      if (clickedGroup === "table")  return "Columns";
       if (clickedGroup === "column") return "In table";
     }
     if (edgeGroup === "synonym") return "Synonym of";
     if (edgeGroup === "related") return "Related to";
-    if (edgeGroup === "error")  return "Links that failed to publish";
+    if (edgeGroup === "error")   return "Links that failed to publish";
     return edgeGroup;
   }
 
-  // Attach explicit ids to edges so we can update them individually.
-  const edgesWithIds = data.edges.map((e, i) => {
+  function styleEdge(e) {
     const s = edgeStyle[e.group] || edgeStyle.definition;
     return {
-      id: e.id || `edge-${i}`,
-      from: e.from, to: e.to, group: e.group,
+      id: e.id, from: e.from, to: e.to, group: e.group,
       color: { color: s.color, opacity: 1.0 },
       arrows: s.arrows, dashes: s.dashes,
+      label: e.label, font: { size: 11, color: "#9aa3b2", strokeWidth: 0 },
       title: e.title,
     };
-  });
+  }
+
+  // Give every edge a stable id so we can update / remove individually.
+  const initialEdges = data.edges.map((e, i) => styleEdge({
+    ...e, id: e.id || `edge-${i}`,
+  }));
 
   const nodesDs = new vis.DataSet(data.nodes);
-  const edgesDs = new vis.DataSet(edgesWithIds);
+  const edgesDs = new vis.DataSet(initialEdges);
   const nodeById = new Map(data.nodes.map(n => [n.id, n]));
 
   const network = new vis.Network(container,
@@ -104,7 +109,7 @@
         "term-ref": { color: { background: "#3a3f5c", border: "#5b6284" },
                       font: { color: "#c7ccdc" } },
         table:      { color: { background: "#14b8a6", border: "#2dd4bf" } },
-        column:     { color: { background: "#475569", border: "#64748b" } },
+        column:     { color: { background: "#475569", border: "#64748b" }, size: 10 },
       },
       physics: {
         stabilization: { iterations: 150 },
@@ -118,6 +123,72 @@
   const panelTitle = document.getElementById("graph-panel-title");
   const panelBody  = document.getElementById("graph-panel-body");
   const panelClose = document.getElementById("graph-panel-close");
+
+  // Tracks which tables are expanded: tableId -> {nodeIds, edgeIds, hiddenAggIds}.
+  const expanded = new Map();
+
+  function expandTable(tableNode) {
+    if (expanded.has(tableNode.id)) return;
+    const cols = Array.isArray(tableNode.columns) ? tableNode.columns : [];
+    if (!cols.length) return;
+
+    const addedNodeIds = [];
+    const addedEdgeIds = [];
+    const hiddenAggIds = [];
+
+    // Hide (remove) every aggregated definition edge originating from this table.
+    edgesDs.forEach(e => {
+      if (e.from === tableNode.id && (e.group === "definition" || e.group === "error")
+          && String(e.id).startsWith("agg:")) {
+        hiddenAggIds.push(e);
+        edgesDs.remove(e.id);
+      }
+    });
+
+    // Add one column node + contains edge + definition/error edge per mapping.
+    cols.forEach((c, i) => {
+      if (!nodeById.has(c.id)) {
+        const node = {
+          id: c.id, label: c.name, group: "column",
+          title: `${tableNode.label}.${c.name}`,
+        };
+        nodesDs.add(node);
+        nodeById.set(c.id, node);
+        addedNodeIds.push(c.id);
+      }
+      const containsId = `exp:contains:${c.id}`;
+      edgesDs.add(styleEdge({
+        id: containsId, from: c.id, to: tableNode.id, group: "contains",
+      }));
+      addedEdgeIds.push(containsId);
+
+      const defGroup = c.is_error ? "error" : "definition";
+      const defId = `exp:def:${c.id}->${c.term_id}`;
+      edgesDs.add(styleEdge({
+        id: defId, from: c.id, to: c.term_id, group: defGroup,
+        title: c.status || undefined,
+      }));
+      addedEdgeIds.push(defId);
+    });
+
+    expanded.set(tableNode.id, { addedNodeIds, addedEdgeIds, hiddenAggIds });
+  }
+
+  function collapseTable(tableId) {
+    const state = expanded.get(tableId);
+    if (!state) return;
+    state.addedEdgeIds.forEach(id => edgesDs.remove(id));
+    state.addedNodeIds.forEach(id => {
+      nodesDs.remove(id);
+      nodeById.delete(id);
+    });
+    state.hiddenAggIds.forEach(e => edgesDs.add(e));
+    expanded.delete(tableId);
+  }
+
+  function collapseAll() {
+    Array.from(expanded.keys()).forEach(collapseTable);
+  }
 
   function focusNode(nodeId) {
     const connectedEdgeIds = new Set(network.getConnectedEdges(nodeId));
@@ -143,14 +214,13 @@
     panelTitle.innerHTML =
       `<span class="panel-kind">${escape(node.group)}</span> ${escape(node.label)}`;
 
-    // Group connected edges by edge.group, record the "other" endpoint id.
     const byGroup = new Map();
     connectedEdgeIds.forEach(eid => {
       const edge = edgesDs.get(eid);
       if (!edge) return;
       const otherId = edge.from === nodeId ? edge.to : edge.from;
       const list = byGroup.get(edge.group) || [];
-      list.push(otherId);
+      list.push({ otherId, edge });
       byGroup.set(edge.group, list);
     });
 
@@ -161,16 +231,19 @@
     }
 
     const sections = [];
-    for (const [group, otherIds] of byGroup) {
-      const other = otherIds.map(id => nodeById.get(id)).filter(Boolean);
-      const title = sectionTitle(node.group, group, other[0] ? other[0].group : "");
-      const dot = edgeStyle[group] ? edgeStyle[group].color : "#6366f1";
-      const items = other.map(o =>
-        `<li><span class="legend-dot" style="background:${groupColor(o.group)}"></span>${escape(o.label)}</li>`
-      ).join("");
+    for (const [group, rows] of byGroup) {
+      const title = sectionTitle(node.group, group);
+      const dotColor = (edgeStyle[group] || edgeStyle.definition).color;
+      const items = rows.map(({ otherId, edge }) => {
+        const o = nodeById.get(otherId);
+        const label = o ? o.label : otherId;
+        const swatch = o ? groupColor(o.group) : "#6366f1";
+        const countBadge = edge.count ? ` <span class="count-badge">${edge.count}</span>` : "";
+        return `<li><span class="legend-dot" style="background:${swatch}"></span>${escape(label)}${countBadge}</li>`;
+      }).join("");
       sections.push(
         `<section>
-           <h4><span class="edge-dot" style="background:${dot}"></span>${escape(title)} (${other.length})</h4>
+           <h4><span class="edge-dot" style="background:${dotColor}"></span>${escape(title)} (${rows.length})</h4>
            <ul>${items}</ul>
          </section>`
       );
@@ -203,15 +276,25 @@
   }
 
   network.on("selectNode", params => {
-    if (params.nodes.length) focusNode(params.nodes[0]);
+    if (!params.nodes.length) return;
+    const nodeId = params.nodes[0];
+    const node = nodeById.get(nodeId);
+    if (node && node.group === "table") expandTable(node);
+    focusNode(nodeId);
   });
-  network.on("deselectNode", clearFocus);
+  network.on("deselectNode", () => {
+    collapseAll();
+    clearFocus();
+  });
   network.on("click", params => {
-    // Click on empty canvas (no node, no edge) clears the focus.
-    if (!params.nodes.length && !params.edges.length) clearFocus();
+    if (!params.nodes.length && !params.edges.length) {
+      collapseAll();
+      clearFocus();
+    }
   });
   panelClose.addEventListener("click", () => {
     network.unselectAll();
+    collapseAll();
     clearFocus();
   });
 })();
