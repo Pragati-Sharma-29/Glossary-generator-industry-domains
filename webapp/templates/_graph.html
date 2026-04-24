@@ -83,7 +83,7 @@
     const label = e.label ? `${typeLabel} · ${e.label}` : typeLabel;
     return {
       id: e.id, from: e.from, to: e.to, group: e.group,
-      color: { color: s.color, opacity: 1.0 },
+      color: s.color,          // plain hex; we swap in rgba() when dimming
       arrows: s.arrows, dashes: s.dashes,
       label,
       font: {
@@ -95,12 +95,23 @@
     };
   }
 
+  // Utility: hex → rgba with a given alpha. Used to dim edges reliably;
+  // updating the {color, opacity} object form on an edge sometimes
+  // fails to re-render in vis-network, but a plain rgba string always
+  // re-renders.
+  function rgba(hex, alpha) {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+    if (!m) return hex;
+    const r = parseInt(m[1], 16), g = parseInt(m[2], 16), b = parseInt(m[3], 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
   // Give every edge a stable id so we can update / remove individually.
   const initialEdges = data.edges.map((e, i) => styleEdge({
     ...e, id: e.id || `edge-${i}`,
   }));
 
-  const nodesDs = new vis.DataSet(data.nodes);
+  const nodesDs = new vis.DataSet(data.nodes.map(n => ({ ...n, opacity: 1.0 })));
   const edgesDs = new vis.DataSet(initialEdges);
   const nodeById = new Map(data.nodes.map(n => [n.id, n]));
 
@@ -132,6 +143,22 @@
   const panelTitle = document.getElementById("graph-panel-title");
   const panelBody  = document.getElementById("graph-panel-body");
   const panelClose = document.getElementById("graph-panel-close");
+
+  // Wire a manual click handler on every <summary> in the panel body
+  // so collapsible sections toggle reliably on iPad Safari. The native
+  // <details> behaviour sometimes stops firing when the summary
+  // contains styled inline descendants; manually flipping `.open`
+  // sidesteps that and still fires the `toggle` event our column
+  // expansion handler listens for.
+  function wirePanelToggles() {
+    panelBody.querySelectorAll("details > summary").forEach(summary => {
+      summary.addEventListener("click", ev => {
+        ev.preventDefault();
+        const d = summary.parentElement;
+        if (d && d.tagName === "DETAILS") d.open = !d.open;
+      });
+    });
+  }
 
   // Tracks which tables are expanded: tableId -> {nodeIds, edgeIds, hiddenAggIds}.
   const expanded = new Map();
@@ -210,7 +237,7 @@
       const s = edgeStyle[e.group] || edgeStyle.definition;
       edgesDs.update({
         id: e.id,
-        color: { color: s.color, opacity: connectedEdgeIds.has(e.id) ? 1.0 : 0.08 },
+        color: connectedEdgeIds.has(e.id) ? s.color : rgba(s.color, 0.08),
       });
     });
 
@@ -285,6 +312,7 @@
     }
 
     panelBody.innerHTML = sections.join("");
+    wirePanelToggles();
     panel.hidden = false;
   }
 
@@ -345,6 +373,7 @@
     if (related.length)  sections.push(buildCollapsibleRefs("Related terms", "#f59e0b", related));
 
     panelBody.innerHTML = sections.join("");
+    wirePanelToggles();
     panel.hidden = false;
 
     // Wire the Columns <details> toggle to expand/collapse the table's
@@ -395,7 +424,7 @@
     nodesDs.forEach(n => nodesDs.update({ id: n.id, opacity: 1.0 }));
     edgesDs.forEach(e => {
       const s = edgeStyle[e.group] || edgeStyle.definition;
-      edgesDs.update({ id: e.id, color: { color: s.color, opacity: 1.0 } });
+      edgesDs.update({ id: e.id, color: s.color });
     });
     panel.hidden = true;
     panelBody.innerHTML = "";
