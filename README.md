@@ -82,6 +82,30 @@ In the Cloud Shell toolbar (top right of the terminal panel) click the
 screen icon → **Preview on port 8080**. A tunneled `https://8080-cs-…cloudshell.dev`
 URL opens with the app.
 
+### Restarting with the latest code
+
+When you pull new changes (or come back to a disconnected Cloud Shell
+session), the app needs a quick restart to pick them up. From inside
+the repo:
+
+```bash
+cd ~/Glossary-generator-industry-domains
+git pull origin claude/glossary-generator-agent-Bkx9w
+fuser -k 8080/tcp 2>/dev/null     # free the port if uvicorn is still bound
+unset GOOGLE_APPLICATION_CREDENTIALS  # Cloud Shell re-sets this per session
+uvicorn webapp:app --host 0.0.0.0 --port 8080
+```
+
+Which bits require the full dance:
+* **Python changes** (`glossary_generator/**`, `webapp/main.py`) — must
+  restart uvicorn to reload the module (`fuser -k` + relaunch above).
+* **Template / CSS / JS changes** (`webapp/templates/**`,
+  `webapp/static/**`) — `git pull` is enough; hard-refresh the
+  browser tab (Cmd/Ctrl+Shift+R) so it drops the cached assets.
+* **RAG seed-doc changes** (`seed_docs/*.md`) — re-run
+  `python scripts/build_rag_corpus.py --domains <domain>` to re-index
+  before restarting the app.
+
 ### Step 6 — Generate your first glossary
 
 1. **Project id** — type your project id → click **Load datasets**.
