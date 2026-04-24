@@ -229,13 +229,29 @@
       byGroup.set(edge.group, list);
     });
 
-    if (!byGroup.size) {
-      panelBody.innerHTML = "<p class=\"panel-empty\">No links for this node.</p>";
-      panel.hidden = false;
-      return;
+    const sections = [];
+
+    // For term nodes, lead with the definition (collapsible). Report-page
+    // term nodes don't carry a description, so the section is skipped
+    // cleanly when node.description is empty.
+    if (node.group === "term" && (node.description || "").trim()) {
+      sections.push(
+        `<section>
+           <details open>
+             <summary><h4><span class="edge-dot" style="background:#6366f1"></span>Description</h4></summary>
+             <p class="panel-description">${escape(node.description)}</p>
+           </details>
+         </section>`
+      );
     }
 
-    const sections = [];
+    // On term clicks keep the primary mappings section (columns mapped
+    // here) open by default; synonyms / related fold closed regardless.
+    const openByDefault = new Set(
+      node.group === "term" ? ["definition", "error", "contains"]
+                            : ["definition", "error", "contains", "synonym", "related"]
+    );
+
     for (const [group, rows] of byGroup) {
       const title = sectionTitle(node.group, group);
       const dotColor = (edgeStyle[group] || edgeStyle.definition).color;
@@ -246,16 +262,19 @@
         const countBadge = edge.count ? ` <span class="count-badge">${edge.count}</span>` : "";
         return `<li><span class="legend-dot" style="background:${swatch}"></span>${escape(label)}${countBadge}</li>`;
       }).join("");
-      // Synonym + related sections fold into <details> so a dense term
-      // doesn't drown out its primary mappings.
-      const collapsible = (group === "synonym" || group === "related");
       const head = `<span class="edge-dot" style="background:${dotColor}"></span>${escape(title)} (${rows.length})`;
+      const open = openByDefault.has(group) ? " open" : "";
       sections.push(
-        collapsible
-          ? `<section><details><summary><h4>${head}</h4></summary><ul>${items}</ul></details></section>`
-          : `<section><h4>${head}</h4><ul>${items}</ul></section>`
+        `<section><details${open}><summary><h4>${head}</h4></summary><ul>${items}</ul></details></section>`
       );
     }
+
+    if (!sections.length) {
+      panelBody.innerHTML = "<p class=\"panel-empty\">No links for this node.</p>";
+      panel.hidden = false;
+      return;
+    }
+
     panelBody.innerHTML = sections.join("");
     panel.hidden = false;
   }

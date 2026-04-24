@@ -576,9 +576,11 @@ def _graph_data_from_suggestion(suggestion) -> dict:
             continue
         node_id = f"term:{i}"
         term_ids[display_name.lower()] = node_id
+        definition = (term.get("definition") or "").strip()
         add_node(
             node_id, display_name, "term",
-            title=(term.get("definition") or "")[:240],
+            title=definition[:240],
+            description=definition,
         )
 
     # Group mappings by table and by (table, term) for aggregation.

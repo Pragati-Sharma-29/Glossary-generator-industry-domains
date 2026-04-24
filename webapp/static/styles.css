@@ -402,6 +402,16 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 #graph-panel-body .panel-empty { color: var(--muted); margin: 6px 0; }
+#graph-panel-body .panel-description {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: #0b0d12;
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
 #graph-panel-body .count-badge {
   display: inline-block;
   font-size: 10px;
