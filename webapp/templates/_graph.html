@@ -199,60 +199,22 @@
     Array.from(expanded.keys()).forEach(collapseTable);
   }
 
-  // For a table click, highlight the full "story" of that table: its
-  // direct links, the terms those columns/aggregates reach, and each
-  // of those terms' own relationships (synonyms / related). BFS outward
-  // stopping at `term-ref` leaves so we don't pull in unrelated tables
-  // connected transitively through shared synonym targets.
-  function collectFocus(nodeId) {
-    const node = nodeById.get(nodeId);
-    const nodeIds = new Set([nodeId]);
-    const edgeIds = new Set();
-
-    if (!node || node.group !== "table") {
-      network.getConnectedEdges(nodeId).forEach(id => edgeIds.add(id));
-      network.getConnectedNodes(nodeId).forEach(id => nodeIds.add(id));
-      return { nodeIds, edgeIds };
-    }
-
-    const queue = [nodeId];
-    const visited = new Set([nodeId]);
-    while (queue.length) {
-      const curr = queue.shift();
-      network.getConnectedEdges(curr).forEach(id => edgeIds.add(id));
-      network.getConnectedNodes(curr).forEach(nid => {
-        if (visited.has(nid)) return;
-        visited.add(nid);
-        nodeIds.add(nid);
-        const nn = nodeById.get(nid);
-        // Stop expansion at term-ref leaves (they're the synonym /
-        // related tail) and at tables other than the one we started at.
-        if (nn && nn.group !== "term-ref" && nn.group !== "table") {
-          queue.push(nid);
-        }
-      });
-    }
-    return { nodeIds, edgeIds };
-  }
-
   function focusNode(nodeId) {
-    const { nodeIds, edgeIds } = collectFocus(nodeId);
-    // For the side-panel, we still want one-hop facts (direct links),
-    // not the wider highlight set.
-    const directEdgeIds = new Set(network.getConnectedEdges(nodeId));
+    const connectedEdgeIds = new Set(network.getConnectedEdges(nodeId));
+    const connectedNodeIds = new Set([nodeId, ...network.getConnectedNodes(nodeId)]);
 
     nodesDs.forEach(n => {
-      nodesDs.update({ id: n.id, opacity: nodeIds.has(n.id) ? 1.0 : 0.15 });
+      nodesDs.update({ id: n.id, opacity: connectedNodeIds.has(n.id) ? 1.0 : 0.15 });
     });
     edgesDs.forEach(e => {
       const s = edgeStyle[e.group] || edgeStyle.definition;
       edgesDs.update({
         id: e.id,
-        color: { color: s.color, opacity: edgeIds.has(e.id) ? 1.0 : 0.08 },
+        color: { color: s.color, opacity: connectedEdgeIds.has(e.id) ? 1.0 : 0.08 },
       });
     });
 
-    renderPanel(nodeId, directEdgeIds);
+    renderPanel(nodeId, connectedEdgeIds);
   }
 
   function renderPanel(nodeId, connectedEdgeIds) {
@@ -285,7 +247,7 @@
       sections.push(
         `<section>
            <details open>
-             <summary><h4><span class="edge-dot" style="background:#6366f1"></span>Description</h4></summary>
+             <summary><span class="section-title"><span class="edge-dot" style="background:#6366f1"></span>Description</span></summary>
              <p class="panel-description">${escape(node.description)}</p>
            </details>
          </section>`
@@ -312,7 +274,7 @@
       const head = `<span class="edge-dot" style="background:${dotColor}"></span>${escape(title)} (${rows.length})`;
       const open = openByDefault.has(group) ? " open" : "";
       sections.push(
-        `<section><details${open}><summary><h4>${head}</h4></summary><ul>${items}</ul></details></section>`
+        `<section><details${open}><summary><span class="section-title">${head}</span></summary><ul>${items}</ul></details></section>`
       );
     }
 
@@ -354,7 +316,7 @@
     const sections = [
       `<section>
          <details class="columns-details"${colsOpenAttr}>
-           <summary><h4><span class="edge-dot" style="background:#6366f1"></span>Columns mapped to terms (${cols.length})</h4></summary>
+           <summary><span class="section-title"><span class="edge-dot" style="background:#6366f1"></span>Columns mapped to terms (${cols.length})</span></summary>
            <ul class="col-term-list">${rows}</ul>
          </details>
        </section>`,
@@ -411,7 +373,7 @@
     ).join("");
     return `<section>
       <details>
-        <summary><h4><span class="edge-dot" style="background:${dotColor}"></span>${escape(title)} (${rows.length})</h4></summary>
+        <summary><span class="section-title"><span class="edge-dot" style="background:${dotColor}"></span>${escape(title)} (${rows.length})</span></summary>
         <ul>${items}</ul>
       </details>
     </section>`;

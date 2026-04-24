@@ -375,20 +375,6 @@ button:disabled {
 }
 #graph-panel-body section { margin-top: 10px; }
 #graph-panel-body section:first-child { margin-top: 2px; }
-#graph-panel-body h4 {
-  margin: 0 0 4px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-#graph-panel-body h4 .edge-dot {
-  display: inline-block;
-  width: 8px; height: 8px; border-radius: 50%;
-}
 #graph-panel-body ul {
   list-style: none;
   margin: 0;
@@ -426,7 +412,9 @@ button:disabled {
 #graph-panel-body details > summary {
   list-style: none;
   cursor: pointer;
-  padding: 0;
+  padding: 4px 0;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 #graph-panel-body details > summary::-webkit-details-marker { display: none; }
 #graph-panel-body details > summary::before {
@@ -434,11 +422,23 @@ button:disabled {
   color: var(--muted);
   display: inline-block;
   margin-right: 2px;
+  pointer-events: none;
 }
 #graph-panel-body details[open] > summary::before { content: "▾ "; }
-#graph-panel-body details > summary h4 {
-  display: inline-flex;
-  margin: 0;
+#graph-panel-body .section-title {
+  display: inline;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  pointer-events: none;
+}
+#graph-panel-body .section-title .edge-dot {
+  display: inline-block;
+  width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
 }
 
 #graph-panel-body ul.col-term-list { margin-top: 2px; }
