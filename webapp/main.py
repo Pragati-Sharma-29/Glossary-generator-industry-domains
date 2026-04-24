@@ -431,6 +431,7 @@ async def suggest(
             "suggestion": result["suggestion"],
             "detected_industry": detected,
             "tables_without_scans": result.get("tables_without_scans", []),
+            "graph_data": _graph_data_from_suggestion(result["suggestion"]),
         },
     )
     # Preserve cookie set by _get_or_create_session_id
@@ -528,11 +529,195 @@ async def publish(
             "total_count": len(all_mappings),
             "glossary_id": cfg["glossary_id"],
             "project_id": cfg["project_id"],
+            "graph_data": _graph_data_from_report(report),
         },
     )
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
+
+
+def _graph_data_from_suggestion(suggestion) -> dict:
+    """Build a vis-network ``{nodes, edges}`` payload from a suggestion.
+
+    ``suggestion`` is the dict produced by ``GlossarySuggestion.to_dict()``.
+
+    Initial view: **terms ↔ tables**, plus term↔term synonym/related links.
+    Column mappings are aggregated into a ``definition`` edge per
+    (table, term) pair carrying a ``count`` label; the full column
+    list is attached to the table node as ``columns`` and the
+    frontend expands it on click.
+
+    Edge ``group`` values drive colour:
+      - ``definition``   table → term (aggregated from column mappings)
+      - ``contains``     table → column (only added client-side on expand)
+      - ``synonym``      term ↔ term
+      - ``related``      term ↔ term
+    """
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    seen: set[str] = set()
+
+    def add_node(node_id: str, label: str, group: str, **extra) -> None:
+        if node_id in seen:
+            return
+        seen.add(node_id)
+        node = {"id": node_id, "label": label, "group": group}
+        node.update(extra)
+        nodes.append(node)
+
+    terms = (suggestion or {}).get("terms") or []
+    mappings = (suggestion or {}).get("mappings") or []
+
+    term_ids: dict[str, str] = {}
+    for i, term in enumerate(terms):
+        display_name = (term.get("display_name") or "").strip()
+        if not display_name:
+            continue
+        node_id = f"term:{i}"
+        term_ids[display_name.lower()] = node_id
+        definition = (term.get("definition") or "").strip()
+        add_node(
+            node_id, display_name, "term",
+            title=definition[:240],
+            description=definition,
+        )
+
+    # Group mappings by table and by (table, term) for aggregation.
+    table_columns: dict[str, list[dict]] = {}
+    agg_counts: dict[tuple[str, str], int] = {}
+    for m in mappings:
+        table = (m.get("table_id") or "").strip()
+        column = (m.get("column_name") or "").strip()
+        term_name = (m.get("term_display_name") or "").strip()
+        if not (table and column and term_name):
+            continue
+        table_id = f"table:{table}"
+        col_id = f"col:{table}.{column}"
+        tid = term_ids.get(term_name.lower())
+        if not tid:
+            tid = f"term:{term_name}"
+            term_ids[term_name.lower()] = tid
+            add_node(tid, term_name, "term")
+        table_columns.setdefault(table_id, []).append(
+            {"id": col_id, "name": column, "term_id": tid, "term_label": term_name},
+        )
+        agg_counts[(table_id, tid)] = agg_counts.get((table_id, tid), 0) + 1
+
+    for table_id, cols in table_columns.items():
+        label = table_id.removeprefix("table:")
+        add_node(table_id, label, "table", columns=cols)
+
+    for (table_id, term_id), count in agg_counts.items():
+        edges.append({
+            "id": f"agg:{table_id}->{term_id}",
+            "from": table_id, "to": term_id,
+            "group": "definition", "count": count,
+            "label": str(count),
+        })
+
+    for term in terms:
+        display_name = (term.get("display_name") or "").strip()
+        src_id = term_ids.get(display_name.lower())
+        if not src_id:
+            continue
+        for kind, items in (("synonym", term.get("synonyms") or []),
+                            ("related", term.get("related_terms") or [])):
+            for ref in items:
+                name = ref.get("name") if isinstance(ref, dict) else str(ref)
+                name = (name or "").strip()
+                if not name:
+                    continue
+                dst_id = term_ids.get(name.lower())
+                if not dst_id:
+                    dst_id = f"ref:{name.lower()}"
+                    term_ids[name.lower()] = dst_id
+                    add_node(dst_id, name, "term-ref")
+                edges.append({"from": src_id, "to": dst_id, "group": kind})
+
+    return {"nodes": nodes, "edges": edges}
+
+
+def _graph_data_from_report(report: dict) -> dict:
+    """Build the same graph shape from a publish report.
+
+    Initial view: term + table nodes, with table→term definition edges
+    aggregated per (table, term) pair and labelled with the count. The
+    per-column detail — including each column's publish status — is
+    attached to the table node and revealed when the user clicks a
+    table in the UI.
+
+    Term↔term entry links from ``report.term_links`` emit synonym /
+    related / error edges between term nodes.
+    """
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    seen: set[str] = set()
+
+    def add_node(node_id: str, label: str, group: str, **extra) -> None:
+        if node_id in seen:
+            return
+        seen.add(node_id)
+        node = {"id": node_id, "label": label, "group": group}
+        node.update(extra)
+        nodes.append(node)
+
+    table_columns: dict[str, list[dict]] = {}
+    agg_counts: dict[tuple[str, str, bool], int] = {}  # (table, term, any_error)
+
+    for m in report.get("mappings") or []:
+        tname = (m.get("term") or "").strip()
+        table = (m.get("table") or "").strip()
+        col = (m.get("column") or "").strip()
+        if not (tname and table and col):
+            continue
+        tid = f"term:{tname.lower()}"
+        table_id = f"table:{table}"
+        col_id = f"col:{table}.{col}"
+        add_node(tid, tname, "term")
+        status = str(m.get("status") or "")
+        is_error = status.startswith("error") or status.startswith("HTTP")
+        table_columns.setdefault(table_id, []).append({
+            "id": col_id, "name": col, "term_id": tid, "term_label": tname,
+            "status": status, "is_error": is_error,
+        })
+        # Aggregate edge carries the *worst* status: any failed column
+        # under this (table, term) flips the whole edge to error colour.
+        key = (table_id, tid)
+        prev = agg_counts.get(key, (0, False))
+        agg_counts[key] = (prev[0] + 1, prev[1] or is_error)
+
+    for table_id, cols in table_columns.items():
+        label = table_id.removeprefix("table:")
+        add_node(table_id, label, "table", columns=cols)
+
+    for (table_id, term_id), (count, any_error) in agg_counts.items():
+        edges.append({
+            "id": f"agg:{table_id}->{term_id}",
+            "from": table_id, "to": term_id,
+            "group": "error" if any_error else "definition",
+            "count": count, "label": str(count),
+        })
+
+    for link in report.get("term_links") or []:
+        parent = (link.get("parent") or "").strip()
+        child = (link.get("child") or "").strip()
+        kind = link.get("kind") or "related"
+        if not (parent and child):
+            continue
+        pid = f"term:{parent.lower()}"
+        cid = f"term:{child.lower()}"
+        add_node(pid, parent, "term")
+        add_node(cid, child, "term")
+        status = str(link.get("status") or "")
+        is_error = status.startswith("error") or status.startswith("HTTP")
+        edges.append({
+            "from": pid, "to": cid,
+            "group": "error" if is_error else kind,
+            "title": status or "created",
+        })
+
+    return {"nodes": nodes, "edges": edges}
 
 
 def _mapping_from_dict(d: dict) -> ColumnMapping:
