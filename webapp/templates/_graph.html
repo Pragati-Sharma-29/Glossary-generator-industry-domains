@@ -227,14 +227,18 @@
   }
 
   function focusNode(nodeId) {
-    // Force vis's internal selection to this single node so the
-    // previously-clicked node loses its selection border and the
-    // graph visibly reflects the new focus. Without this the prior
-    // node stayed visually selected even after we dimmed it.
-    network.selectNodes([nodeId], false);
-
-    const connectedEdgeIds = new Set(network.getConnectedEdges(nodeId));
-    const connectedNodeIds = new Set([nodeId, ...network.getConnectedNodes(nodeId)]);
+    // Query vis for the clicked node's direct neighbourhood. Wrapped
+    // in try/catch because calling these on a just-added (dynamically
+    // expanded) column node can occasionally throw mid-layout, and we
+    // don't want one bad click to freeze every click after it.
+    let connectedEdgeIds = new Set();
+    let connectedNodeIds = new Set([nodeId]);
+    try {
+      connectedEdgeIds = new Set(network.getConnectedEdges(nodeId));
+      connectedNodeIds = new Set([nodeId, ...network.getConnectedNodes(nodeId)]);
+    } catch (err) {
+      console.warn("graph: getConnected* failed for", nodeId, err);
+    }
 
     nodesDs.forEach(n => {
       nodesDs.update({ id: n.id, opacity: connectedNodeIds.has(n.id) ? 1.0 : 0.15 });
@@ -246,9 +250,14 @@
         color: connectedEdgeIds.has(e.id) ? s.color : rgba(s.color, 0.08),
       });
     });
-    // Force a redraw so the selection-border removal on the prior
-    // node + the new opacity values both land in the next frame.
-    network.redraw();
+
+    // Replace vis's selection with just this node so the previous
+    // node's selection border drops. Skipping the event emit (second
+    // arg false) keeps the flow single-sourced from our click handler.
+    try { network.selectNodes([nodeId], false); } catch (err) {
+      console.warn("graph: selectNodes failed for", nodeId, err);
+    }
+    try { network.redraw(); } catch (err) { /* non-fatal */ }
 
     renderPanel(nodeId, connectedEdgeIds);
   }
@@ -441,17 +450,23 @@
   }
 
   network.on("click", params => {
-    // Single click path drives both selection and deselection:
-    //   - Node click  → focus that node (panel updates to its content).
-    //   - Empty click → collapse all expanded tables + close the panel.
-    // Edge-only clicks leave everything alone.
-    if (params.nodes && params.nodes.length) {
-      focusNode(params.nodes[0]);
-      return;
-    }
-    if (!params.edges || !params.edges.length) {
-      collapseAll();
-      clearFocus();
+    try {
+      // Single click path drives both selection and deselection:
+      //   - Node click  → focus that node (panel updates to its content).
+      //   - Empty click → collapse all expanded tables + close the panel.
+      // Edge-only clicks leave everything alone.
+      if (params && params.nodes && params.nodes.length) {
+        focusNode(params.nodes[0]);
+        return;
+      }
+      if (!params || !params.edges || !params.edges.length) {
+        collapseAll();
+        clearFocus();
+      }
+    } catch (err) {
+      console.error("graph: click handler crashed", err);
+      // Reset to a known-good state so the next click can recover.
+      try { clearFocus(); } catch (_) { /* best-effort */ }
     }
   });
   // Stop taps inside the panel from leaking to vis-network's Hammer
