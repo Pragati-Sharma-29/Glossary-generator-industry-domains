@@ -445,12 +445,34 @@
       clearFocus();
     }
   });
-  panelClose.addEventListener("click", ev => {
-    ev.stopPropagation();
-    ev.preventDefault();
+  // Stop taps inside the panel from leaking to vis-network's Hammer
+  // listener on the canvas. Without this, an iPad tap on the panel's
+  // header / close button can also register as a click on the node
+  // behind it, re-opening the panel right after close.
+  ["click", "touchstart", "touchend", "pointerdown"].forEach(evt => {
+    panel.addEventListener(evt, ev => ev.stopPropagation(), true);
+  });
+
+  function dismissPanel(ev) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
     network.unselectAll();
     collapseAll();
     clearFocus();
+  }
+  // Listen on both click and touchend — iOS occasionally drops click
+  // after a delayed / gesture-adjacent tap, so touchend is the safety
+  // net. Flag guards against firing both for the same interaction.
+  let closeTriggered = false;
+  panelClose.addEventListener("click", ev => {
+    if (closeTriggered) { closeTriggered = false; return; }
+    dismissPanel(ev);
+  });
+  panelClose.addEventListener("touchend", ev => {
+    closeTriggered = true;
+    dismissPanel(ev);
+    // Reset the guard shortly after, in case the synthetic click
+    // never arrives.
+    setTimeout(() => { closeTriggered = false; }, 500);
   });
 })();
 </script>
