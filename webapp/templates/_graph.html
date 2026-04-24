@@ -431,23 +431,23 @@
     panelTitle.textContent = "";
   }
 
-  network.on("selectNode", params => {
-    if (!params.nodes.length) return;
-    // Don't auto-expand tables anymore — the operator drives expansion
-    // via the "Columns mapped to terms" <details> in the info panel.
-    focusNode(params.nodes[0]);
-  });
-  network.on("deselectNode", () => {
-    collapseAll();
-    clearFocus();
-  });
   network.on("click", params => {
-    if (!params.nodes.length && !params.edges.length) {
+    // Single click path drives both selection and deselection:
+    //   - Node click  → focus that node (panel updates to its content).
+    //   - Empty click → collapse all expanded tables + close the panel.
+    // Edge-only clicks leave everything alone.
+    if (params.nodes && params.nodes.length) {
+      focusNode(params.nodes[0]);
+      return;
+    }
+    if (!params.edges || !params.edges.length) {
       collapseAll();
       clearFocus();
     }
   });
-  panelClose.addEventListener("click", () => {
+  panelClose.addEventListener("click", ev => {
+    ev.stopPropagation();
+    ev.preventDefault();
     network.unselectAll();
     collapseAll();
     clearFocus();
