@@ -77,11 +77,20 @@
 
   function styleEdge(e) {
     const s = edgeStyle[e.group] || edgeStyle.definition;
+    // Annotate every edge with its link type; aggregated edges keep
+    // their count, joined with a middle dot ("definition · 3").
+    const typeLabel = (e.group || "").toString();
+    const label = e.label ? `${typeLabel} · ${e.label}` : typeLabel;
     return {
       id: e.id, from: e.from, to: e.to, group: e.group,
       color: { color: s.color, opacity: 1.0 },
       arrows: s.arrows, dashes: s.dashes,
-      label: e.label, font: { size: 11, color: "#9aa3b2", strokeWidth: 0 },
+      label,
+      font: {
+        size: 10, color: "#9aa3b2",
+        strokeWidth: 3, strokeColor: "#0b0d12",
+        align: "middle",
+      },
       title: e.title,
     };
   }
