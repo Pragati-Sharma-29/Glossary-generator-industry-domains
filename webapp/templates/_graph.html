@@ -446,11 +446,16 @@
     }
   });
   // Stop taps inside the panel from leaking to vis-network's Hammer
-  // listener on the canvas. Without this, an iPad tap on the panel's
-  // header / close button can also register as a click on the node
-  // behind it, re-opening the panel right after close.
+  // listener on the canvas. Without this, a tap on the panel's header
+  // or close button can also register as a click on the node behind
+  // it, re-opening the panel right after close.
+  //
+  // Listen in the bubble phase (default) so the event still reaches
+  // its target inside the panel — a capture-phase listener here would
+  // swallow the close-button click before the button's own handler
+  // ran, which is exactly the "close button does nothing" bug.
   ["click", "touchstart", "touchend", "pointerdown"].forEach(evt => {
-    panel.addEventListener(evt, ev => ev.stopPropagation(), true);
+    panel.addEventListener(evt, ev => ev.stopPropagation());
   });
 
   function dismissPanel(ev) {
