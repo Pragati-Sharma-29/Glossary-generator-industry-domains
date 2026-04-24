@@ -118,12 +118,28 @@ Which bits require the full dance:
 7. On the **Review page**:
    * Confirm the detected industry card (expected domain should appear
      with a confidence score and short reasoning).
+   * Explore the **Graph view** — an interactive force-directed graph
+     of the suggestion. Terms, tables, and promoted synonyms render as
+     coloured nodes; edges carry their type label (`definition`,
+     `synonym`, `related`, `contains`, `error`), and each table→term
+     edge is labelled with the number of columns behind it. Click a
+     node to focus its relationships (the rest of the graph dims).
+     Click a table to see its full neighbourhood — terms and those
+     terms' synonyms/related — light up; then expand
+     **Columns mapped to terms** in the side panel to pull each column
+     into the graph with its per-column edges. Term clicks open a side
+     panel with the term's definition plus collapsible Columns / Synonym
+     of / Related to sections.
    * Expand each term to see proposed synonyms and related terms
      (including metrics/KPIs) — tick any you want to promote into
      standalone glossary terms.
    * In the Column mappings table, tick the ones you want to publish
      (defaults to all approved). Low-confidence rows are highlighted.
 8. Scroll to the bottom and click **Publish approved mappings**.
+   A second loader overlay appears for ~10–40 s while terms are
+   created and entry links are written. The result page also includes
+   a graph — same layout as the review page, but with any failed
+   links rendered as red edges so you can spot what didn't land.
 
 ### Step 7 — Verify in the Dataplex Catalog UI
 
@@ -340,6 +356,20 @@ token the build uses seed_docs only and still produces a usable corpus
 2. **Review** — shows:
    - **Detected industry** card with confidence + reasoning; warning
      if no corpus was resolved for the detected domain.
+   - **Graph view** — `vis-network` force-directed rendering built
+     from the same suggestion payload. Nodes:
+     term (indigo) / table (teal) / term-ref (dim, a synonym or
+     related target that isn't itself a proposed term) — column nodes
+     are *not* drawn initially; they're carried as metadata on each
+     table node. Edges: `definition · N` (table↔term, N = column
+     count) in blue, `synonym` in green, `related` in amber dashed.
+     Clicking a node dims everything else to 15% / 8% opacity. Table
+     clicks widen that focus to a BFS-reached neighbourhood (terms +
+     their synonyms/related). The side panel lists link types grouped
+     as collapsible `<details>` sections — expanding **Columns
+     mapped to terms** is what drops the column nodes into the graph
+     (with contains + definition edges), and collapsing it removes
+     them again.
    - **Proposed terms** — each with its definition. Expand to see the
      term's synonyms and related terms (including metrics); each has
      a 1-line description explaining what it is and how it maps.
@@ -356,8 +386,11 @@ token the build uses seed_docs only and still produces a usable corpus
      wiring the new term to its parent structurally
 
 The result page lists all three sections with per-row status (created /
-exists / error). Session state is held in-process; swap `_SESSIONS` in
-`webapp/main.py` for Redis/Firestore to run multi-instance.
+exists / error) and reuses the same interactive graph view, with any
+edges coming back as errors rendered in red so you can spot which
+column↔term or term↔term links didn't land. Session state is held
+in-process; swap `_SESSIONS` in `webapp/main.py` for Redis/Firestore to
+run multi-instance.
 
 ## Output (JSON mode)
 
