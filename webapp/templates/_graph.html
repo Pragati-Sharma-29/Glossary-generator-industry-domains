@@ -199,22 +199,60 @@
     Array.from(expanded.keys()).forEach(collapseTable);
   }
 
+  // For a table click, highlight the full "story" of that table: its
+  // direct links, the terms those columns/aggregates reach, and each
+  // of those terms' own relationships (synonyms / related). BFS outward
+  // stopping at `term-ref` leaves so we don't pull in unrelated tables
+  // connected transitively through shared synonym targets.
+  function collectFocus(nodeId) {
+    const node = nodeById.get(nodeId);
+    const nodeIds = new Set([nodeId]);
+    const edgeIds = new Set();
+
+    if (!node || node.group !== "table") {
+      network.getConnectedEdges(nodeId).forEach(id => edgeIds.add(id));
+      network.getConnectedNodes(nodeId).forEach(id => nodeIds.add(id));
+      return { nodeIds, edgeIds };
+    }
+
+    const queue = [nodeId];
+    const visited = new Set([nodeId]);
+    while (queue.length) {
+      const curr = queue.shift();
+      network.getConnectedEdges(curr).forEach(id => edgeIds.add(id));
+      network.getConnectedNodes(curr).forEach(nid => {
+        if (visited.has(nid)) return;
+        visited.add(nid);
+        nodeIds.add(nid);
+        const nn = nodeById.get(nid);
+        // Stop expansion at term-ref leaves (they're the synonym /
+        // related tail) and at tables other than the one we started at.
+        if (nn && nn.group !== "term-ref" && nn.group !== "table") {
+          queue.push(nid);
+        }
+      });
+    }
+    return { nodeIds, edgeIds };
+  }
+
   function focusNode(nodeId) {
-    const connectedEdgeIds = new Set(network.getConnectedEdges(nodeId));
-    const connectedNodeIds = new Set([nodeId, ...network.getConnectedNodes(nodeId)]);
+    const { nodeIds, edgeIds } = collectFocus(nodeId);
+    // For the side-panel, we still want one-hop facts (direct links),
+    // not the wider highlight set.
+    const directEdgeIds = new Set(network.getConnectedEdges(nodeId));
 
     nodesDs.forEach(n => {
-      nodesDs.update({ id: n.id, opacity: connectedNodeIds.has(n.id) ? 1.0 : 0.15 });
+      nodesDs.update({ id: n.id, opacity: nodeIds.has(n.id) ? 1.0 : 0.15 });
     });
     edgesDs.forEach(e => {
       const s = edgeStyle[e.group] || edgeStyle.definition;
       edgesDs.update({
         id: e.id,
-        color: { color: s.color, opacity: connectedEdgeIds.has(e.id) ? 1.0 : 0.08 },
+        color: { color: s.color, opacity: edgeIds.has(e.id) ? 1.0 : 0.08 },
       });
     });
 
-    renderPanel(nodeId, connectedEdgeIds);
+    renderPanel(nodeId, directEdgeIds);
   }
 
   function renderPanel(nodeId, connectedEdgeIds) {
@@ -309,9 +347,13 @@
         <span class="term-label">${escape(termLabel)}</span>${errBadge}
       </li>`;
     }).join("");
+    // Columns stay collapsed on first click; expanding this <details>
+    // is what triggers expandTable() — the graph only gains column
+    // nodes when the operator opens this section in the text box.
+    const colsOpenAttr = expanded.has(tableNode.id) ? " open" : "";
     const sections = [
       `<section>
-         <details open>
+         <details class="columns-details"${colsOpenAttr}>
            <summary><h4><span class="edge-dot" style="background:#6366f1"></span>Columns mapped to terms (${cols.length})</h4></summary>
            <ul class="col-term-list">${rows}</ul>
          </details>
@@ -342,6 +384,21 @@
 
     panelBody.innerHTML = sections.join("");
     panel.hidden = false;
+
+    // Wire the Columns <details> toggle to expand/collapse the table's
+    // columns in the graph. Re-focuses afterwards so the dim set picks
+    // up the newly-added or removed nodes.
+    const colsDetails = panelBody.querySelector("details.columns-details");
+    if (colsDetails) {
+      colsDetails.addEventListener("toggle", () => {
+        if (colsDetails.open) {
+          expandTable(tableNode);
+        } else {
+          collapseTable(tableNode.id);
+        }
+        focusNode(tableNode.id);
+      });
+    }
   }
 
   function buildCollapsibleRefs(title, dotColor, rows) {
@@ -385,10 +442,9 @@
 
   network.on("selectNode", params => {
     if (!params.nodes.length) return;
-    const nodeId = params.nodes[0];
-    const node = nodeById.get(nodeId);
-    if (node && node.group === "table") expandTable(node);
-    focusNode(nodeId);
+    // Don't auto-expand tables anymore — the operator drives expansion
+    // via the "Columns mapped to terms" <details> in the info panel.
+    focusNode(params.nodes[0]);
   });
   network.on("deselectNode", () => {
     collapseAll();
