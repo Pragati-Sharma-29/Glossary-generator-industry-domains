@@ -569,7 +569,12 @@ class GlossaryPublisher:
         entry_link_name = f"{parent}/entryLinks/{link_id}"
 
         payload = {
-            "term": term_resource,
+            # `term` carries the human display name so the result UI and
+            # graph view can render it directly. The full resource path
+            # is kept as `term_resource` for callers that need the
+            # canonical Dataplex name.
+            "term": mapping.term_display_name,
+            "term_resource": term_resource,
             "table": f"{dataset_id}.{mapping.table_id}",
             "column": mapping.column_name,
             "entry_link": entry_link_name,
