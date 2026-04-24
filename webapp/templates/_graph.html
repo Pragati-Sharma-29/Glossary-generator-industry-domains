@@ -226,11 +226,12 @@
     Array.from(expanded.keys()).forEach(collapseTable);
   }
 
-  function focusNode(nodeId) {
-    // Query vis for the clicked node's direct neighbourhood. Wrapped
-    // in try/catch because calling these on a just-added (dynamically
-    // expanded) column node can occasionally throw mid-layout, and we
-    // don't want one bad click to freeze every click after it.
+  // Update just the graph's dim / highlight state for a focused node.
+  // Split out of focusNode so the columns-details toggle can refresh
+  // the dimming after expand/collapse without also rebuilding the
+  // side panel — rebuilding during a click event destroys the
+  // <details> element we're inside and freezes subsequent toggles.
+  function updateDim(nodeId) {
     let connectedEdgeIds = new Set();
     let connectedNodeIds = new Set([nodeId]);
     try {
@@ -251,14 +252,16 @@
       });
     });
 
-    // Replace vis's selection with just this node so the previous
-    // node's selection border drops. Skipping the event emit (second
-    // arg false) keeps the flow single-sourced from our click handler.
     try { network.selectNodes([nodeId], false); } catch (err) {
       console.warn("graph: selectNodes failed for", nodeId, err);
     }
     try { network.redraw(); } catch (err) { /* non-fatal */ }
 
+    return connectedEdgeIds;
+  }
+
+  function focusNode(nodeId) {
+    const connectedEdgeIds = updateDim(nodeId);
     renderPanel(nodeId, connectedEdgeIds);
   }
 
@@ -394,9 +397,11 @@
     wirePanelToggles();
     panel.hidden = false;
 
-    // Wire the Columns <details> toggle to expand/collapse the table's
-    // columns in the graph. Re-focuses afterwards so the dim set picks
-    // up the newly-added or removed nodes.
+    // Wire the Columns <details> toggle to expand/collapse the
+    // table's columns in the graph. Just re-dims (no panel rebuild)
+    // so the <details> element we're currently inside of stays alive
+    // — rebuilding the panel during a click destroys the element
+    // the toggle event fired on and wedges subsequent interactions.
     const colsDetails = panelBody.querySelector("details.columns-details");
     if (colsDetails) {
       colsDetails.addEventListener("toggle", () => {
@@ -405,7 +410,7 @@
         } else {
           collapseTable(tableNode.id);
         }
-        focusNode(tableNode.id);
+        updateDim(tableNode.id);
       });
     }
   }
