@@ -214,6 +214,11 @@
     panelTitle.innerHTML =
       `<span class="panel-kind">${escape(node.group)}</span> ${escape(node.label)}`;
 
+    if (node.group === "table") {
+      renderTablePanel(node);
+      return;
+    }
+
     const byGroup = new Map();
     connectedEdgeIds.forEach(eid => {
       const edge = edgesDs.get(eid);
@@ -241,15 +246,88 @@
         const countBadge = edge.count ? ` <span class="count-badge">${edge.count}</span>` : "";
         return `<li><span class="legend-dot" style="background:${swatch}"></span>${escape(label)}${countBadge}</li>`;
       }).join("");
+      // Synonym + related sections fold into <details> so a dense term
+      // doesn't drown out its primary mappings.
+      const collapsible = (group === "synonym" || group === "related");
+      const head = `<span class="edge-dot" style="background:${dotColor}"></span>${escape(title)} (${rows.length})`;
       sections.push(
-        `<section>
-           <h4><span class="edge-dot" style="background:${dotColor}"></span>${escape(title)} (${rows.length})</h4>
-           <ul>${items}</ul>
-         </section>`
+        collapsible
+          ? `<section><details><summary><h4>${head}</h4></summary><ul>${items}</ul></details></section>`
+          : `<section><h4>${head}</h4><ul>${items}</ul></section>`
       );
     }
     panelBody.innerHTML = sections.join("");
     panel.hidden = false;
+  }
+
+  function renderTablePanel(tableNode) {
+    const cols = Array.isArray(tableNode.columns) ? tableNode.columns : [];
+    if (!cols.length) {
+      panelBody.innerHTML = "<p class=\"panel-empty\">No columns mapped for this table.</p>";
+      panel.hidden = false;
+      return;
+    }
+
+    // Primary section: column → mapped term, one row per mapping.
+    const rows = cols.map(c => {
+      const termLabel = c.term_label || "";
+      const errBadge = c.is_error
+        ? ' <span class="status-badge err" title="publish failed">failed</span>'
+        : "";
+      return `<li class="col-term-row">
+        <code>${escape(c.name)}</code>
+        <span class="arrow">→</span>
+        <span class="legend-dot" style="background:#6366f1"></span>
+        <span class="term-label">${escape(termLabel)}</span>${errBadge}
+      </li>`;
+    }).join("");
+    const sections = [
+      `<section>
+         <h4><span class="edge-dot" style="background:#6366f1"></span>Columns mapped to terms (${cols.length})</h4>
+         <ul class="col-term-list">${rows}</ul>
+       </section>`,
+    ];
+
+    // Derived sections: synonyms / related of the terms this table's
+    // columns map to. Edges are queried off the current DataSet so the
+    // list reflects whatever the graph is actually showing.
+    const mappedTermIds = new Set(cols.map(c => c.term_id).filter(Boolean));
+    const synonyms = [];
+    const related = [];
+    edgesDs.forEach(e => {
+      if (e.group !== "synonym" && e.group !== "related") return;
+      let parentId = null, otherId = null;
+      if (mappedTermIds.has(e.from)) { parentId = e.from; otherId = e.to; }
+      else if (mappedTermIds.has(e.to)) { parentId = e.to; otherId = e.from; }
+      else return;
+      const bucket = e.group === "synonym" ? synonyms : related;
+      bucket.push({
+        parent: nodeById.get(parentId) || { label: parentId },
+        other:  nodeById.get(otherId)  || { label: otherId, group: "term-ref" },
+      });
+    });
+
+    if (synonyms.length) sections.push(buildCollapsibleRefs("Synonyms", "#22c55e", synonyms));
+    if (related.length)  sections.push(buildCollapsibleRefs("Related terms", "#f59e0b", related));
+
+    panelBody.innerHTML = sections.join("");
+    panel.hidden = false;
+  }
+
+  function buildCollapsibleRefs(title, dotColor, rows) {
+    const items = rows.map(({ parent, other }) =>
+      `<li>
+         <span class="legend-dot" style="background:${groupColor(other.group)}"></span>
+         ${escape(other.label)}
+         <span class="via">via ${escape(parent.label)}</span>
+       </li>`
+    ).join("");
+    return `<section>
+      <details>
+        <summary><h4><span class="edge-dot" style="background:${dotColor}"></span>${escape(title)} (${rows.length})</h4></summary>
+        <ul>${items}</ul>
+      </details>
+    </section>`;
   }
 
   function groupColor(g) {
