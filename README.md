@@ -1,8 +1,8 @@
 # Glossary Generator using industry and domain context
 
 An agent that reads a BigQuery dataset, enriches it with Dataplex
-data-profile / data-insights results, **auto-detects the industry**,
-grounds reasoning in the matching per-domain Vertex AI RAG corpus, and
+data-profile / data-insights results, auto-detects the industry,
+grounds reasoning in the matching **per-domain Vertex AI RAG corpus**, and
 proposes business-glossary terms (with synonyms, related terms, and
 metrics) plus column mappings. Approved suggestions are written back to
 a Dataplex business glossary.
